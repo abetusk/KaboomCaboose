@@ -1,0 +1,35 @@
+{
+  "license": "SPDX-License-Identifier: CC0-1.0",
+  "_doc": "Difficulty sets offered when making a room. Each changes settings from config/game.json for that room only: a section name (rules, train, avatar, station, levelgen) and the keys to change. An empty set keeps the file's values. Listed in this order on the page; 'default' names the one picked to start with. Easy and hard are first guesses, to be tuned by play. 'test' is not generated: it is the hand-made test run (src/gen/testrun.ts: flat, no black rock, grey rock along the top, trees along the bottom, track piled beside each station), for trying out stations, upgrades, wagons and dynamite quickly; its set changes settings like any other.",
+  "default": "moderate",
+  "sets": {
+    "easy": {
+      "levelgen": {
+        "narrowGap": [2, 2],
+        "wideGap": [2, 3],
+        "forestDensity": 70.0,
+        "rockDensity": 70.0,
+        "blackrockDensity": 6.0,
+        "pondDensity": 6,
+        "levels": 2
+      },
+      "rules": {
+        "timerSlack": 2.0
+      }
+    },
+    "moderate": {},
+    "hard": {
+      "levelgen": {
+        "forestDensity": 35.0,
+        "rockDensity": 35.0,
+        "blackrockDensity": 14.0,
+        "pondDensity": 14,
+        "levels": 4
+      },
+      "rules": {
+        "timerSlack": 1.25
+      }
+    },
+    "test": {}
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "voxel-rail",
+  "version": "0.0.1",
+  "private": true,
+  "license": "CC0-1.0",
+  "type": "module",
+  "scripts": {
+    "genlevel": "node tools/genlevel.ts",
+    "carvevox": "node tools/carvevox.ts",
+    "brickvox": "node tools/brickvox.ts",
+    "render": "node tools/render.ts",
+    "test": "node --test --test-force-exit test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "node tools/build.ts",
+    "server": "node server/main.ts"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "@types/three": "0.186.0",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,66 @@
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>voxel-rail</title>
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/build/three.module.js",
+    "three/addons/": "./vendor/three/examples/jsm/"
+  }
+}
+</script>
+<style>
+html, body { margin: 0; height: 100%; overflow: hidden; background: #a8c8e8; font-family: system-ui, sans-serif; }
+canvas { display: block; }
+#hud { position: fixed; left: 8px; top: 8px; color: #fff; background: rgba(0, 0, 0, 0.45); padding: 6px 8px; border-radius: 6px; font-size: 13px; white-space: pre; pointer-events: none; }
+#labels .label { position: fixed; transform: translate(-50%, -100%); color: #fff; font-size: 12px; text-shadow: 0 0 3px #000; white-space: nowrap; pointer-events: none; }
+#emotes { display: none; position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: rgba(0, 0, 0, 0.55); color: #fff; padding: 8px; border-radius: 8px; font-size: 14px; }
+#emotes span { padding: 4px 8px; margin: 0 2px; border-radius: 4px; }
+#emotes span.on { background: #e0a040; color: #000; }
+#banner { display: none; position: fixed; left: 50%; top: 30%; transform: translate(-50%, -50%); color: #fff; background: rgba(0, 0, 0, 0.55); padding: 14px 24px; border-radius: 10px; font-size: 32px; font-weight: 600; pointer-events: none; }
+#labels .deny { position: fixed; transform: translate(-50%, -100%); color: #ff2020; font-size: 34px; font-weight: 900; text-shadow: 0 0 4px #000; pointer-events: none; display: none; }
+#help { display: none; position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); background: rgba(10, 10, 10, 0.88); color: #eee; padding: 12px 18px; border-radius: 8px; font-size: 13px; max-height: 90%; overflow-y: auto; }
+#help h2 { margin: 0 0 8px; font-size: 16px; color: #f0c040; }
+#help table { border-collapse: collapse; }
+#help td { padding: 2px 10px 2px 0; vertical-align: top; }
+#help td:first-child { color: #f0c040; white-space: nowrap; }
+#settings { position: fixed; right: 8px; top: 8px; max-height: calc(100% - 16px); overflow-y: auto; background: rgba(20, 20, 20, 0.82); color: #eee; border-radius: 6px; font-size: 12px; }
+#settings summary { cursor: pointer; padding: 6px 10px; font-size: 13px; }
+#settingsBody { padding: 0 10px 10px; width: 290px; }
+#settings fieldset { border: 1px solid #555; border-radius: 4px; margin: 6px 0; padding: 4px 6px; }
+#settings legend { color: #f0c040; }
+#settings label { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 2px 0; }
+#settings input[type=number] { width: 80px; background: #222; color: #eee; border: 1px solid #555; border-radius: 3px; }
+#settings button { margin-top: 6px; }
+#lobby { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(560px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow-y: auto; box-sizing: border-box; background: rgba(15, 18, 24, 0.92); color: #eee; padding: 16px 20px; border-radius: 10px; font-size: 14px; }
+#lobby h1 { margin: 0 0 10px; font-size: 22px; color: #f0c040; }
+#lobby h2 { margin: 16px 0 6px; font-size: 15px; color: #f0c040; }
+#lobby input, #lobby select { background: #222; color: #eee; border: 1px solid #555; border-radius: 4px; padding: 3px 6px; font-size: 14px; }
+#lobby input.code { width: 5em; text-transform: uppercase; letter-spacing: 2px; }
+#lobby button { background: #e0a040; color: #000; border: 0; border-radius: 4px; padding: 4px 12px; font-size: 14px; cursor: pointer; }
+#lobby table { border-collapse: collapse; width: 100%; }
+#lobby th { text-align: left; color: #aaa; font-weight: normal; padding: 2px 6px 2px 0; }
+#lobby td { padding: 3px 6px 3px 0; }
+#lobby .row { display: flex; gap: 8px; }
+#lobby .form { display: grid; grid-template-columns: max-content 1fr; gap: 6px 12px; align-items: center; margin-bottom: 10px; }
+#lobby .form input[type=number] { width: 6em; }
+#lobby .form input[type=checkbox], #lobby .form select { justify-self: start; }
+#lobby .msg { margin-top: 10px; color: #ff8070; min-height: 1em; }
+#leave { display: none; position: fixed; left: 8px; bottom: 8px; background: rgba(0, 0, 0, 0.55); color: #fff; border: 1px solid #888; border-radius: 6px; padding: 4px 10px; font-size: 13px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="hud">Loading... (press ? for keys)</div>
+<div id="labels"></div>
+<div id="emotes"></div>
+<div id="banner"></div>
+<div id="help"></div>
+<details id="settings"><summary>Settings</summary><div id="settingsBody"></div></details>
+<button id="leave">Leave room</button>
+<script type="module" src="./src/client/main.js"></script>
+</body>
+</html>

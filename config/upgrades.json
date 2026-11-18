@@ -1,0 +1,18 @@
+{
+  "license": "SPDX-License-Identifier: CC0-1.0",
+  "_doc": "Station upgrades (D6.7). On arriving at a station other than the last, perStation upgrades are drawn at random from those not yet taken max times in this run; the team picks one by standing in its circle, or loses the pick when the countdown ends; either way the next level starts at once. Each upgrade adds its changes to settings from config/game.json ('section.key': amount, negative to lower). The label is shown with the first change's value now and after, followed by the optional unit. A wagon upgrade ('wagon': storage, crafting or dynamite) joins the back of the train at once, and is offered only while the train has room (each storage wagon holds storageMax more of each resource; each crafting wagon trackMax more track and makes a pair alongside the others). 'needs' names an upgrade that must have been taken first in the run. A new run starts from the room's settings without them.",
+  "perStation": 3,
+  "upgrades": {
+    "carry":   { "label": "Carry",          "max": 3, "changes": { "rules.carryMax": 1 } },
+    "storage": { "label": "Wagon storage",  "max": 3, "changes": { "rules.storageMax": 1 } },
+    "speed":   { "label": "Walk speed",     "unit": " cells/s", "max": 3, "changes": { "avatar.walkSpeed": 0.5 } },
+    "track":   { "label": "Track on wagon", "max": 3, "changes": { "rules.trackMax": 1 } },
+    "tools":   { "label": "Chop and mine", "unit": " s a hit", "max": 3, "changes": { "rules.hitSeconds": -0.1 } },
+    "craft":   { "label": "Track making", "unit": " s a pair", "max": 3, "changes": { "rules.craftSecondsPerPair": -0.25 } },
+    "storageWagon":  { "label": "Storage wagon",  "max": 2, "wagon": "storage" },
+    "craftingWagon": { "label": "Crafting wagon", "max": 2, "wagon": "crafting" },
+    "dynamiteWagon": { "label": "Dynamite wagon", "max": 1, "wagon": "dynamite" },
+    "cheapDynamite": { "label": "Wood and ore a stick", "max": 2, "needs": "dynamiteWagon",
+                       "changes": { "rules.dynamiteWood": -1, "rules.dynamiteOre": -1 } }
+  }
+}

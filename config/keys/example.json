@@ -1,0 +1,8 @@
+{
+  "license": "CC0-1.0",
+  "about": "Example per-person bindings (D3.8). Open the game with ?keys=example to use them. Only the actions listed here change; the rest keep the defaults in config/game.json. The license and about keys are ignored.",
+  "keyboard": {
+    "action": ["Space", "KeyJ"],
+    "boost": ["KeyK"]
+  }
+}
