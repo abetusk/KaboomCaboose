@@ -201,7 +201,7 @@
     "weather": true,
     "weatherBlendCells": 8,
 
-    "rainChance": 0.9,
+    "rainChance": 0.05,
     "rainDrops": 400,
     "rainSplash": 0.35,
     "rainVoxels": 1,
