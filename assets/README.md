@@ -12,6 +12,11 @@
 - `third_party/mehrasaur/`: model 10 of mehrasaur's Voxel Buildings,
   the source of the station building `generated/station-house.vox` (CC0,
   see the README.md there).
+- `third_party/nice-color-palettes/`: the 500 palettes of
+  Experience Monks' nice-color-palettes (MIT, see the LICENSE.md there),
+  as JSON, for the level palettes experiment (D11.19).
+- `third_party/soundlib/`: sound effects from the project owner's sound
+  library (source and licence not recorded; see the README.md there).
 - `preview/`: preview images and `index.html`, a self-contained gallery.
 
 Scale: one cell is 32 voxels across, one height level 16 voxels; the train

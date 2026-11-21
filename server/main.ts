@@ -30,11 +30,12 @@ import { join, normalize, extname, dirname } from "node:path";
 import { WebSocketServer, type WebSocket } from "../vendor/ws/wrapper.mjs";
 import { CONFIG } from "../src/config.ts";
 import { NO_INPUT, TOOL_PREV, type Input } from "../src/sim/game.ts";
-import { EMOTES, ROOM_LIMITS, type ClientMsg, type RoomDefaults } from "../src/net/protocol.ts";
+import { EMOTES, ROOM_LIMITS, CHARACTERS, type ClientMsg, type RoomDefaults } from "../src/net/protocol.ts";
 import { build } from "../tools/build.ts";
 import { Lag } from "./lag.ts";
 import { Room, send, QUEUE_MAX, type Client } from "./room.ts";
 import { DIFFICULTIES, DEFAULT_DIFFICULTY } from "./difficulty.ts";
+import { LobbyRoom } from "./lobby.ts";
 
 const ROOT = join(dirname(new URL(import.meta.url).pathname), "..");
 
@@ -140,11 +141,26 @@ function roomDefaults(): RoomDefaults {
   return { levels: DEFAULT_LEVELS, width: gen.width, length: gen.length, difficulty: DEFAULT_DIFFICULTY };
 }
 
-function onMessage(rooms: Map<string, Room>, first: Room, c: Client, data: string): void {
+// The rooms listed: open ones whose run has not ended.
+//
+function openRooms(rooms: Map<string, Room>): ReturnType<Room["info"]>[] {
+  return [...rooms.values()].filter(r => ( r.open && !r.closed )).map(r => r.info());
+}
+
+function onMessage(rooms: Map<string, Room>, first: Room, lobby: Room, c: Client, data: string): void {
   let m: ClientMsg;
   try { m = JSON.parse(data); } catch { return; }
   const name = () => String((m as { name?: unknown }).name ?? "player").slice(0, 24);
-  if (m.t === "hello") {
+
+  // A character picked comes with joining (Hello, CreateMsg, LobbyMsg)
+  // and holds for the rooms joined after.
+  //
+  const ch = (m as { character?: unknown }).character;
+  if ( (typeof ch === "string") && CHARACTERS.includes(ch) ) { c.character = ch; }
+  if (m.t === "lobby") {
+    lobby.join(c, name());
+  }
+  else if (m.t === "hello") {
     const code = ( (typeof m.room === "string") ? m.room.trim().toUpperCase() : "" ),
           room = ( code ? rooms.get(code) : first );
     if (!room) { send(c, { t: "error", text: "no room " + code }); return; }
@@ -186,7 +202,7 @@ function onMessage(rooms: Map<string, Room>, first: Room, c: Client, data: strin
     room.join(c, name());
   }
   else if (m.t === "list") {
-    send(c, { t: "rooms", rooms: [...rooms.values()].filter(r => r.open).map(r => r.info()), difficulties: DIFFICULTIES,
+    send(c, { t: "rooms", rooms: openRooms(rooms), difficulties: DIFFICULTIES,
               defaults: roomDefaults() });
   }
   else if (m.t === "leave") {
@@ -208,6 +224,7 @@ function onMessage(rooms: Map<string, Room>, first: Room, c: Client, data: strin
       emote: ( ( Number.isInteger(m.emote) && (m.emote >= 0) && (m.emote < EMOTES.length) ) ? m.emote : -1 ),
       tool: ( ( Number.isInteger(m.tool) && (m.tool >= 0) && (m.tool <= TOOL_PREV) ) ? m.tool : -1 ),
       fast: (m.fast === true),
+      aim: ( ( (typeof m.aim === "number") && Number.isFinite(m.aim) && (m.aim >= 0) ) ? Math.min(1, m.aim) : -1 ),
     };
     if (!c.room) { return; }
     if (c.queue.length >= QUEUE_MAX) { c.queue.shift(); }
@@ -232,6 +249,16 @@ export function startServer(port = PORT, host = HOST, serveFiles = STATIC,
         first = new Room(newCode(rooms), { name: "Main", open: true, levels: DEFAULT_LEVELS, difficulty: DEFAULT_DIFFICULTY }, SEED, true);
   first.dev = dev;
   rooms.set(first.code, first);
+
+  // The walk-in lobby, kept apart from the rooms (never listed, never
+  // closed).
+  //
+  const lobby: LobbyRoom = new LobbyRoom("LOBBY", {
+    rooms        : () => openRooms(rooms),
+    difficulties : DIFFICULTIES,
+    act          : (c, m) => onMessage(rooms, first, lobby, c, JSON.stringify(m)),
+  });
+  lobby.dev = dev;
   if (dev) { console.log("development shortcuts on (--dev)"); }
   console.log("first room:", first.code);
   let nextId = 1;
@@ -249,7 +276,7 @@ export function startServer(port = PORT, host = HOST, serveFiles = STATIC,
     let gone = false;
     ws.on("message", (d: unknown) => {
       const text = String(d);
-      c.up.run(() => { if (!gone) { onMessage(rooms, first, c, text); } });
+      c.up.run(() => { if (!gone) { onMessage(rooms, first, lobby, c, text); } });
     });
     ws.on("close", () => { gone = true; sockets.delete(ws); c.up.clear(); c.down.clear(); c.room?.leave(c); });
   });
@@ -269,6 +296,7 @@ export function startServer(port = PORT, host = HOST, serveFiles = STATIC,
       }
       r.tick();
     }
+    lobby.tick();
   }, 1000 / CONFIG.server.tickHz);
   return new Promise(ok => {
     http.listen(port, host, () => {

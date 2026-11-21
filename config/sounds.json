@@ -1,0 +1,27 @@
+{
+  "_doc": {
+    "folder": "Folder the sound files are in, relative to the page (the build copies assets/third_party into it).",
+    "sounds": "What plays when (D11b). Each: `files`, one or more file names in the folder (one is picked at random each time it plays), and `volume`, its own loudness (1 = as recorded; view.soundVolume scales all of them).",
+    "trainStart": "The train leaves.",
+    "trainRunning": "Looped while the train runs, faster on fast-forward.",
+    "endWarning": "The track ahead ends within view.hornWarnCells cells and does not reach the end station: repeated, more often the closer the end.",
+    "bump": "A character boosts into the train (at most once in 1.5 s per character); walking into it makes no sound.",
+    "built": "A bridge or a stair is built.",
+    "crash": "The train crashes.",
+    "blast": "A stick of dynamite goes off.",
+    "mine": "Each time a character's pickaxe strikes grey rock (view.swingsPerSecond sets how often), faded out when they stop.",
+    "chop": "While a character chops a tree: the same."
+  },
+  "folder": "assets/third_party/soundlib/",
+  "sounds": {
+    "trainStart":   { "files": ["train_horn.mp3"], "volume": 1 },
+    "trainRunning": { "files": ["chug_loop.mp3"], "volume": 0.6 },
+    "endWarning":   { "files": ["train_horn.mp3"], "volume": 1 },
+    "bump":         { "files": ["train_horn.mp3"], "volume": 1 },
+    "built":        { "files": ["rub.mp3"], "volume": 1 },
+    "crash":        { "files": ["explosion.mp3"], "volume": 1 },
+    "blast":        { "files": ["explosion.mp3"], "volume": 1 },
+    "mine":         { "files": ["mine0.mp3", "mine1.mp3", "mine2.mp3", "mine3.mp3"], "volume": 1 },
+    "chop":         { "files": ["wood2.mp3", "wood3.mp3", "wood4.mp3"], "volume": 1 }
+  }
+}

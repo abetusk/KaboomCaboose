@@ -19,7 +19,9 @@
 //
 // Moving: a pinch (hand tracking) or a squeeze (controller grip) grabs.
 // One grab drags the level along the board, as a right-button drag pans
-// on the page (`pan`, taken by the page each frame). Two grabs carry the
+// on the page (`pan`, taken by the page each frame); while it is one
+// controller's grip, the right thumbstick slides the view along the
+// level too (2026-11-20, view.arStickPanCells). Two grabs carry the
 // board, turn it about the vertical and resize it (src/client/board.ts);
 // letting go of the second anchors it again.
 //
@@ -27,6 +29,11 @@
 import * as THREE from "three";
 import { ARButton } from "three/addons/webxr/ARButton.js";
 import { dwell, DWELL_TIME, faceYaw, moveTwo, type BoardPose, type Dwell, type P3 } from "./board.ts";
+import { CONFIG } from "../config.ts";
+
+// Thumbstick tilt below this counts as none.
+//
+const STICK_DEAD = 0.15;
 
 // Pinch: thumb and index finger tips closer than PINCH_ON metres starts
 // a grab, further than PINCH_OFF ends it (the gap stops flicker).
@@ -42,6 +49,12 @@ export class ArBoard {
   pose     : BoardPose;
   placed   : boolean;
   pads     : Record<Hand, Gamepad | null>;
+
+  // Each controller's pointing tilt in degrees above level (its target
+  // ray), from the last frame; null without one. Sets the dynamite
+  // throw's distance (input.throwPitch).
+  //
+  pitch    : Record<Hand, number | null>;
 
   // Viewer position and look direction in room space, from the last
   // frame.
@@ -72,6 +85,7 @@ export class ArBoard {
     this.pose      = { x: 0, y: 0, z: 0, yaw: 0, scale: 1 };
     this.placed    = false;
     this.pads      = { left: null, right: null };
+    this.pitch     = { left: null, right: null };
     this.head      = { x: 0, y: 0, z: 0 };
     this.look      = { x: 0, y: 0, z: -1 };
     this.hitSource = null;
@@ -122,6 +136,7 @@ export class ArBoard {
       this.panLast   = null;
       this.pan       = 0;
       this.pads      = { left: null, right: null };
+      this.pitch     = { left: null, right: null };
       this.reticle.visible = false;
       board.position.set(0, 0, 0);
       board.rotation.set(0, 0, 0);
@@ -148,7 +163,8 @@ export class ArBoard {
   // Once per frame while in AR, before input is read and the board drawn.
   //
   update(frame: XRFrame | undefined): void {
-    this.pads = { left: null, right: null };
+    this.pads  = { left: null, right: null };
+    this.pitch = { left: null, right: null };
     if ( !this.active || !frame ) { return; }
     const ref = this.renderer.xr.getReferenceSpace();
     if (!ref) { return; }
@@ -169,7 +185,15 @@ export class ArBoard {
         if (pinch) { pts.push([src, pinch]); }
         continue;
       }
-      if ( src.gamepad && ( (src.handedness === "left") || (src.handedness === "right") ) ) { this.pads[src.handedness] = src.gamepad; }
+      if ( src.gamepad && ( (src.handedness === "left") || (src.handedness === "right") ) ) {
+        this.pads[src.handedness] = src.gamepad;
+        const ray = frame.getPose(src.targetRaySpace, ref);
+        if (ray) {
+          const o = ray.transform.orientation,
+                d = new THREE.Vector3(0, 0, -1).applyQuaternion(new THREE.Quaternion(o.x, o.y, o.z, o.w));
+          this.pitch[src.handedness] = (Math.asin(Math.max(-1, Math.min(1, d.y))) * 180) / Math.PI;
+        }
+      }
       if (src.gamepad?.buttons[1]?.pressed) {
         const g = frame.getPose(src.gripSpace ?? src.targetRaySpace, ref);
         if (g) { pts.push([src, { x: g.transform.position.x, y: g.transform.position.y, z: g.transform.position.z }]); }
@@ -183,7 +207,7 @@ export class ArBoard {
     this.tLast = now;
     if ( !this.placed && (pts.length > 0) ) { this.place(); }
     if (!this.placed) { this.follow(frame, ref, dt); }
-    else              { this.grab(frame, ref, pts); }
+    else              { this.grab(frame, ref, pts, dt); }
     this.apply();
   }
 
@@ -250,7 +274,7 @@ export class ArBoard {
   // After placing: one grab drags the level, two move the board; the
   // anchor holds the board otherwise.
   //
-  private grab(frame: XRFrame, ref: XRReferenceSpace, pts: [XRInputSource, P3][]): void {
+  private grab(frame: XRFrame, ref: XRReferenceSpace, pts: [XRInputSource, P3][], dt: number): void {
     const ids  = pts.map(([s]) => s),
           two  = (pts.length >= 2),
           same = ( (ids.length === this.grabIds.length) && ids.every((s, k) => (s === this.grabIds[k])) );
@@ -268,6 +292,18 @@ export class ArBoard {
       const x = this.boardX(pts[0][1]);
       this.pan    += x - this.panLast;
       this.panLast = x;
+
+      // A controller's grip held alone: the right thumbstick slides the
+      // view along the level as well, toward the way it is pushed (right
+      // and away from the viewer, as the viewer faces the board).
+      //
+      const pad  = this.pads.right,
+            dead = (v: number) => ( (Math.abs(v) < STICK_DEAD) ? 0 : v ),
+            sx   = dead(pad?.axes[2] ?? 0), sy = dead(pad?.axes[3] ?? 0);
+      if ( !pts[0][0].hand && ( sx || sy ) ) {
+        const lk = this.lookOnBoard(), along = (sx * -lk.z) - (sy * lk.x);
+        this.pan -= along * CONFIG.view.arStickPanCells * dt;
+      }
     }
 
     // A new anchor where the board now rests; once tracked, the board
@@ -307,52 +343,5 @@ export class ArBoard {
           z = (this.look.x * s) + (this.look.z * c),
           l = Math.hypot(x, z);
     return ( (l > 1e-3) ? { x: x / l, z: z / l } : { x: 0, z: -1 } );
-  }
-}
-
-// A line of text drawn on a sprite: names, emotes and messages in AR,
-// where the page's HTML overlays are not shown.
-//
-export class Tag {
-  sprite : THREE.Sprite;
-  height : number;
-  private canvas : HTMLCanvasElement;
-  private tex    : THREE.CanvasTexture;
-  private text   : string;
-
-  // height: the text's height in board units (cells).
-  //
-  constructor(height: number) {
-    this.canvas = document.createElement("canvas");
-    this.canvas.width  = 512;
-    this.canvas.height = 64;
-    this.tex    = new THREE.CanvasTexture(this.canvas);
-    this.tex.colorSpace = THREE.SRGBColorSpace;
-    this.sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: this.tex, depthWrite: false, transparent: true }));
-    this.sprite.renderOrder = 5;
-    this.sprite.visible = false;
-    this.height = height;
-    this.text   = "";
-  }
-
-  set(text: string, colour = "#ffffff"): void {
-    this.sprite.visible = (text !== "");
-    if (text === this.text) { return; }
-    this.text = text;
-    const g = this.canvas.getContext("2d");
-    if (!g) { return; }
-    g.font = "600 40px system-ui, sans-serif";
-    const w = Math.min(2048, Math.ceil(g.measureText(text).width) + 24);
-    if (w !== this.canvas.width) { this.canvas.width = w; }
-    g.clearRect(0, 0, this.canvas.width, this.canvas.height);
-    g.fillStyle = "rgba(0, 0, 0, 0.55)";
-    g.fillRect(0, 0, this.canvas.width, this.canvas.height);
-    g.font = "600 40px system-ui, sans-serif";
-    g.fillStyle = colour;
-    g.textBaseline = "middle";
-    g.fillText(text, 12, 34);
-    this.tex.dispose();
-    this.tex.needsUpdate = true;
-    this.sprite.scale.set(this.height * (this.canvas.width / this.canvas.height), this.height, 1);
   }
 }

@@ -107,6 +107,32 @@ export interface ViewConfig {
   waterVariety        : boolean;
   arCellSize          : number;
   arWindowCells       : number;
+  arStickPanCells     : number;
+  palette             : boolean;
+  paletteSeed         : number;
+  paletteStrength     : number;
+  paletteBlendCells   : number;
+  weather             : boolean;
+  rainChance          : number;
+  snowChance          : number;
+  weatherBlendCells   : number;
+  rainDrops           : number;
+  snowFlakes          : number;
+  rainSplash          : number;
+  rainVoxels          : number;
+  arRainVoxels        : number;
+  rainStreak          : number;
+  rainSlant           : number;
+  rainSpeed           : number;
+  puddles             : number;
+  birds               : boolean;
+  birdFlocks          : number;
+  birdsPerFlock       : number;
+  sound               : boolean;
+  swingsPerSecond     : number;
+  soundVolume         : number;
+  soundHalfCells      : number;
+  hornWarnCells       : number;
   brickRock           : boolean;
   brickRelief         : boolean;
   carvedRelief        : boolean;
@@ -142,6 +168,11 @@ export interface InputConfig {
   gamepad  : Record<InputAction | ScreenAction | ToolAction, number | number[]> & { move: string, emotePick: string };
   xr       : Record<InputAction | ToolAction | ScreenAction | "move" | "emotePick", [string, string]>;
   deadzone : number;
+
+  // AR controller tilt (degrees above level) for the nearest and the
+  // farthest dynamite throw (2026-11-19).
+  //
+  throwPitch : [number, number];
 }
 
 export interface GameConfig {
@@ -214,6 +245,10 @@ function input(): InputConfig {
     if ( !Array.isArray(v) || (v.length !== 2) || !["left", "right"].includes(v[0]) ) { bad("xr." + k + " must be [hand, control]"); }
   }
   if ( (typeof s.deadzone !== "number") || (s.deadzone < 0) || (s.deadzone >= 1) ) { bad("deadzone must be in [0, 1)"); }
+  const tp = s.throwPitch;
+  if ( !Array.isArray(tp) || (tp.length !== 2) || !tp.every(v => ( (typeof v === "number") && (Math.abs(v) <= 90) )) || (tp[0] >= tp[1]) ) {
+    bad("throwPitch must be [nearest, farthest] in degrees, -90 to 90, nearest below farthest");
+  }
   return s;
 }
 

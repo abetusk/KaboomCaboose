@@ -23,9 +23,9 @@ import { CONFIG, DOCS } from "../config.ts";
 import { Cell, DIRS, isRamp } from "../level/cells.ts";
 import { World, Item, ITEM_NAMES, wagonOf } from "../sim/world.ts";
 import { carPose } from "../sim/path.ts";
-import { Game, CARS, CAR_LEN, WHEELBASE, PAD_RADIUS, TAP, Tool, TOOL_NAMES, trainBody, type Input, type Train, type Pad, type Plan, type Offer } from "../sim/game.ts";
+import { Game, CARS, CAR_LEN, WHEELBASE, PAD_RADIUS, TAP, throwPower, Tool, TOOL_NAMES, trainBody, type Input, type Train, type Pad, type Plan, type Offer } from "../sim/game.ts";
 import { launch, stepBomb, flight, type Bomb } from "../sim/dynamite.ts";
-import { EMOTES, SHARED_SECTIONS, type ServerMsg, type State, type PlayerView, type ClientMsg, type RoomInfo } from "../net/protocol.ts";
+import { EMOTES, SHARED_SECTIONS, type ServerMsg, type State, type PlayerView, type ClientMsg, type RoomInfo, type LobbyPad } from "../net/protocol.ts";
 import { Lobby } from "./lobby.ts";
 import { UPGRADES, OFFERS_PER_STATION, upgrade } from "../upgrades.ts";
 import { loadVox, voxGeometry, type Vox } from "./voxel.ts";
@@ -33,11 +33,17 @@ import { Terrain, topY, yawFor, curveYaw, TRACK_PILE, itemScale, TERRAIN_VIEW_KE
 import { Controls, loadBindings } from "./input.ts";
 import { Chips } from "./chips.ts";
 import { Puffs } from "./puffs.ts";
-import { Blast, shake } from "./blast.ts";
+import { Blast, BURST_RADIUS, shake } from "./blast.ts";
 import { Predictor, Interp } from "./netsync.ts";
 import { handTool } from "./handtools.ts";
 import { characterGear, carGear, characterOffer, toolGear, blockText, GLOW } from "./gear.ts";
-import { ArBoard, Tag } from "./ar.ts";
+import { ArBoard } from "./ar.ts";
+import { VoxText, GOLD, RED as RED_TEXT, type TextLine } from "./voxtext.ts";
+import { drawable } from "./voxfont.ts";
+import { Sounds, passed, type Voice, type Pt3 } from "./sound.ts";
+import { Climate } from "./climate.ts";
+import { WeatherView } from "./weather.ts";
+import { Birds } from "./birds.ts";
 import { BRICK_PALETTE, BRICK_CRACK } from "../assets/bricks.ts";
 
 const GEN = "assets/generated/", KY = "assets/third_party/kytric/";
@@ -91,10 +97,7 @@ async function loadModels(): Promise<{ m: Models, loco: Vox, wagons: Vox[], hous
 // ---- page ----
 
 const hud   = document.getElementById("hud")!,
-      banner = document.getElementById("banner")!,
-      setBody = document.getElementById("settingsBody")!,
-      menuEl = document.getElementById("emotes")!,
-      labels = document.getElementById("labels")!;
+      setBody = document.getElementById("settingsBody")!;
 
 // The game server is where the page came from, under the page's own
 // folder: at https://example.com/rail/ the connection is
@@ -234,20 +237,88 @@ renderer.clippingPlanes = [clipW, clipE];
 // a board seen from a few centimetres is not cut away.
 //
 let arOn = false, arCentre = 0, arPan = 0;
+// Sound effects (2026-11-20, D11b; src/client/sound.ts). The browser
+// lets them start only after a click, a key or a touch on the page.
+//
+// What plays when is config/sounds.json.
+//
+const sounds = new Sounds(CONFIG.view);
+void sounds.load();
+for (const ev of ["pointerdown", "keydown", "touchstart"]) { addEventListener(ev, () => sounds.resume()); }
+
+// Rain, snow and birds (D11.20, D11.21), added to the board once it
+// exists.
+//
+const weather = new WeatherView(CONFIG.view),
+      birds   = new Birds(CONFIG.view);
+content.add(weather.group, birds.group);
+
+// The room's seed (Welcome.seed), so everyone in the room gets the same
+// weather; what the weather was last made for.
+//
+let runSeed = 1, climateKey = "", weatherWorld: World | null = null;
+
+// The train's chug and each character's mining or chopping, while they
+// play; when the horn last sounded.
+//
+let chug: Voice | null = null, hornAt = -1e9;
+const chops = new Map<number, Voice>();
+
+// Every sound that follows the game stops (leaving a room, a new level).
+//
+// The swing animation, and how far through it the pick strikes (the arm
+// stops coming down at about 0.23 s of its 0.42 s).
+//
+const SWING        = "attack-melee-right",
+      SWING_STRIKE = 0.56;
+
+function mineStrike(id: number): void {
+  const at = avatarAt(id);
+  if (!at) { return; }
+  const v = sounds.play("mine", at);
+  if (v) { chops.set(id, v); }
+}
+
+function hush(): void {
+  chug?.stop();
+  chug = null;
+  for (const v of chops.values()) { v.stop(); }
+  chops.clear();
+}
+
 function arMode(on: boolean): void {
   arOn = on;
   scene.background = ( on ? null : SKY );
   camera.near = ( on ? 0.01 : 0.1 );
   camera.far  = ( on ? 20 : 400 );
   camera.updateProjectionMatrix();
-  if (on) { arCentre = orbit.target.x; arPan = 0; timer.disconnect(); }
+  if (on) { arCentre = orbit.target.x; arPan = 0; timer.disconnect(); sounds.resume(); }
   else    { content.position.set(0, 0, 0); timer.connect(document); }
+
+  // AR started from the HTML lobby goes into the walk-in lobby; AR ended
+  // there goes back to the HTML lobby (2026-11-20).
+  //
+  if      ( on && !roomInfo && !asked ) { lobby.hide(); toWalkIn(); }
+  else if ( !on && roomInfo?.lobby )    { say({ t: "leave" }); toLobby(); }
 }
 const ar = new ArBoard(renderer, scene, board, () => CONFIG.view.arCellSize, () => arMode(true), () => arMode(false));
 navigator.xr?.isSessionSupported("immersive-ar")
   .then(ok => { if (ok) { document.body.appendChild(ar.button()); } })
   .catch(() => { });
-const arBanner = new Tag(2.5), arMenu = new Tag(0.8);
+// Messages in blocks (2026-11-19; src/client/voxtext.ts): the level-end
+// message and the AR placing hint over the middle of the board, the
+// seconds until the train leaves over the start pad, and the emote menu
+// as an oval of words around this player's character, a little toward
+// the viewer, each word where the stick or keys point to pick it (up
+// first, then clockwise, as Controls.sector counts).
+//
+const msgText   = new VoxText(0.075),
+      leaveText = new VoxText(0.1, GOLD),
+      menuRing  = new THREE.Group(),
+      menuWords = EMOTES.map(() => new VoxText(0.04)),
+      MENU_RX   = 1.1,
+      MENU_RY   = 0.85;
+menuWords.forEach(t => menuRing.add(t.group));
 
 // ---- state ----
 
@@ -337,6 +408,7 @@ function own(p: PlayerView): PlayerView {
 }
 
 const models = await loadModels();
+
 const vmat   = new THREE.MeshLambertMaterial({ vertexColors: true });
 const geoOf  = new Map<Vox, THREE.BufferGeometry>();
 const vmesh  = (m: Vox) => {
@@ -353,15 +425,14 @@ await Promise.all(["knight", "zombie", "robot"].map(async c => {
 }));
 
 interface Avatar {
+  character : string;
   root    : THREE.Group;
   mixer   : THREE.AnimationMixer;
   actions : Map<string, THREE.AnimationAction>;
   current : string;
   hands   : THREE.Group;
   handKey : string;
-  label   : HTMLDivElement;
-  deny    : HTMLDivElement;
-  tag     : Tag;
+  over    : VoxText;
   tools   : THREE.Group[];
   boosted : boolean;
   gear    : THREE.Object3D[];
@@ -372,8 +443,34 @@ interface Avatar {
   h       : number;
   moving  : number;
   yaw     : number;
+
+  // Where the swing animation was last frame (seconds into its clip;
+  // -1 not swinging), to catch the pick's strike.
+  //
+  swingT  : number;
 }
 const avatars = new Map<number, Avatar>();
+
+// A player's name in blocks (2026-11-19), smaller than the messages over
+// it. Characters the voxel font lacks are left out; a name with none it
+// has shows as "?".
+//
+const NAME_SCALE = 0.7;
+
+function shownName(name: string): string {
+  const t = [...name].filter(ch => drawable(ch)).join("").trim();
+  return ( t || "?" );
+}
+
+function dropAvatar(id: number): void {
+  const a = avatars.get(id);
+  if (!a) { return; }
+  content.remove(a.root, a.edge);
+  a.over.dispose();
+  avatars.delete(id);
+  chops.get(id)?.stop();
+  chops.delete(id);
+}
 
 function makeAvatar(p: PlayerView): Avatar {
   const g = gltfs.get(p.character) ?? gltfs.get("knight")!,
@@ -387,8 +484,8 @@ function makeAvatar(p: PlayerView): Avatar {
   hands.position.set(0, 0.32, 0.28);
   root.add(hands);
   content.add(root);
-  const tag = new Tag(0.6);
-  content.add(tag.sprite);
+  const over = new VoxText(0.05);
+  content.add(over.group);
 
   // The pickaxe and the axe, held on the right arm (D11a.4); shown by
   // the tool the player holds.
@@ -398,13 +495,7 @@ function makeAvatar(p: PlayerView): Avatar {
   for (const t of tools) { t.visible = false; arm.add(t); }
   const edge = edgeMarker(p.id === myId);
   content.add(edge);
-  const label = document.createElement("div");
-  label.className = "label";
-  const deny = document.createElement("div");
-  deny.className = "deny";
-  deny.textContent = "\u2715";
-  labels.append(label, deny);
-  return { root, mixer, actions, current: "", hands, handKey: "", label, deny, tag, tools, boosted: p.boosting, gear: [], gearKey: "", edge, x: p.x, y: p.y, h: 0, moving: 0,
+  return { character: p.character, root, mixer, actions, current: "", hands, handKey: "", over, tools, boosted: p.boosting, gear: [], gearKey: "", edge, x: p.x, y: p.y, h: 0, moving: 0, swingT: -1,
            yaw: Math.atan2(Math.cos(p.heading), Math.sin(p.heading)) };
 }
 
@@ -480,7 +571,7 @@ padShadow.rotation.x = -Math.PI / 2;
 padFill.rotation.x = -Math.PI / 2;
 padFill.position.y = 0.005;
 padGroup.add(padShadow, padFill, padIcon);
-content.add(padGroup, arBanner.sprite, arMenu.sprite);
+content.add(padGroup, msgText.group, leaveText.group, menuRing);
 let padShown = -1;
 
 // Above the pad, START in block letters (2026-11-18), about 1.5 cells
@@ -534,7 +625,7 @@ interface OfferView {
 //
 const OFFER_CAR_SCALE = 1.3, OFFER_GEAR_SCALE = 4;
 
-const OFFER_CAR: Record<string, string> = { storage: "storage", track: "crafting", craft: "crafting", cheapDynamite: "dynamite" };
+const OFFER_CAR: Record<string, string> = { storage: "storage", track: "crafting", craft: "crafting", cheapDynamite: "dynamite", blast: "dynamite" };
 
 function offerIcon(kind: string): THREE.Group {
   const g = new THREE.Group(), u = upgrade(kind), tk = taken(),
@@ -609,6 +700,69 @@ function drawOffers(offers: Offer[], w: World, time: number): void {
   GLOW.emissiveIntensity = 0.45 + (0.35 * Math.sin(time * 4));
 }
 
+// The walk-in lobby's circles (2026-11-20; server/lobby.ts): like the
+// start pad, a shadow circle with a pie that fills while someone stands
+// in it, and over it its words in blocks. A character circle has that
+// character standing on it, turning slowly, its name gold once it is
+// this player's.
+//
+interface LobbyView {
+  group : THREE.Group;
+  fill  : THREE.Mesh;
+  model : THREE.Object3D | null;
+  text  : VoxText;
+  shown : number;
+}
+
+const lobbyViews = new Map<string, LobbyView>();
+
+function lobbyView(pad: LobbyPad): LobbyView {
+  const group = new THREE.Group(),
+        shadow = new THREE.Mesh(padShadow.geometry, padShadow.material),
+        fill   = new THREE.Mesh(new THREE.CircleGeometry(PAD_RADIUS * 0.9, 40, 0, 0.001), padFillMat),
+        text   = new VoxText(0.055);
+  shadow.rotation.x = -Math.PI / 2;
+  fill.rotation.x   = -Math.PI / 2;
+  fill.position.y   = 0.005;
+  group.add(shadow, fill, text.group);
+  let model: THREE.Object3D | null = null;
+  if (pad.kind === "character") {
+    model = cloneSkinned((gltfs.get(pad.value) ?? gltfs.get("knight")!).scene);
+    model.traverse(o => { o.castShadow = true; });
+    group.add(model);
+  }
+  content.add(group);
+  return { group, fill, model, text, shown: -1 };
+}
+
+function drawLobby(pads: LobbyPad[], w: World, time: number): void {
+  const keep = new Set<string>(), mine = last?.players.find(p => (p.id === myId))?.character ?? "";
+  for (const pad of pads) {
+    const key = pad.kind + ":" + pad.value;
+    keep.add(key);
+    let v = lobbyViews.get(key);
+    if (!v) { v = lobbyView(pad); lobbyViews.set(key, v); }
+    v.group.position.set(pad.x, standY(w, pad.x, pad.y) + 0.01, pad.y);
+    if (v.model) { v.model.rotation.y = time * 0.6; }
+    v.text.set(pad.label.map(l => ({ parts: [{ text: l, colour: ( ( (pad.kind === "character") && (pad.value === mine) ) ? GOLD : undefined ) }] })));
+    v.text.group.position.y = ( v.model ? 1.25 : 0.7 );
+    const f = Math.min(1, pad.progress / CONFIG.station.dwellSeconds);
+    if (Math.abs(f - v.shown) > 1e-3) {
+      v.shown = f;
+      v.fill.geometry.dispose();
+      const len = Math.max(0.001, f * Math.PI * 2);
+      v.fill.geometry = new THREE.CircleGeometry(PAD_RADIUS * 0.9, 40, (Math.PI / 2) - len, len);
+    }
+  }
+  for (const [key, v] of lobbyViews) {
+    if (keep.has(key)) { continue; }
+    v.text.dispose();
+    v.fill.geometry.dispose();
+    content.remove(v.group);
+    lobbyViews.delete(key);
+  }
+}
+
 // Height of the walking surface at a point (ramps slope).
 //
 function standY(w: World, x: number, y: number): number {
@@ -646,6 +800,7 @@ let derailT = -1, lastPhase = "";
 function derail(w: World, t: Train, now: number): void {
   const cp = carPose(w, line, t.p - (CAR_LEN / 2), WHEELBASE), f = cp.front, y = topY(f.z) + RAIL_TOP;
   blast.burst(f.x, y, f.y);
+  birds.disturb(f.x, y, f.y);
   chips.burst(f.x, y + 0.4, f.y, 30, 2.2, [new THREE.Color(0x2e2e30), new THREE.Color(0x5a5a5e), new THREE.Color(2.0, 0.6, 0.1)], topY(f.z), 0.08);
   derailT = now;
 }
@@ -671,17 +826,28 @@ function stickMesh(): THREE.Group {
   return g;
 }
 
-const bombGroup = new THREE.Group();
+// Each stick on the ground or in the air shows its fuse's whole seconds
+// left in blocks (2026-11-19).
+//
+const bombGroup = new THREE.Group(), bombTexts = [] as VoxText[];
 content.add(bombGroup);
 let shownBombs: Bomb[] = [], boomT = -1;
 
 function drawBombs(w: World, dt: number, now: number): void {
-  while (bombGroup.children.length < shownBombs.length) { bombGroup.add(stickMesh()); }
+  while (bombGroup.children.length < shownBombs.length) {
+    const t = new VoxText(0.05, RED_TEXT);
+    bombGroup.add(stickMesh());
+    content.add(t.group);
+    bombTexts.push(t);
+  }
   bombGroup.children.forEach((o, k) => {
-    const b = shownBombs[k];
+    const b = shownBombs[k], t = bombTexts[k];
     o.visible = !!b;
-    if (!b) { return; }
+    if (!b) { t.set([]); return; }
     stepBomb(w, b, dt);
+    b.fuse -= dt;
+    t.set([String(Math.ceil(Math.max(0, b.fuse)))]);
+    t.group.position.set(b.x, b.z + 0.35, b.y);
     o.position.set(b.x, b.z + 0.05, b.y);
     o.rotation.y = b.id;
     if (!b.rest) { o.rotation.z = now * 9; }
@@ -691,8 +857,10 @@ function drawBombs(w: World, dt: number, now: number): void {
 }
 
 function boom(x: number, y: number, z: number, now: number): void {
-  blast.burst(x, z, y);
-  chips.burst(x, z + 0.3, y, 30, 2.6, [new THREE.Color(0x5a5a5e), new THREE.Color(0x6b4a2b), new THREE.Color(2.0, 0.7, 0.15)], z, 0.08);
+  const s = Math.max(0.5, CONFIG.rules.blastRadius / BURST_RADIUS);
+  blast.burst(x, z, y, s);
+  birds.disturb(x, z, y);
+  chips.burst(x, z + 0.3, y, 30, 2.6 * s, [new THREE.Color(0x5a5a5e), new THREE.Color(0x6b4a2b), new THREE.Color(2.0, 0.7, 0.15)], z, 0.08);
   boomT = now;
 }
 
@@ -708,12 +876,23 @@ aimDots.frustumCulled = false;
 aimRing.rotation.x = -Math.PI / 2;
 content.add(aimDots, aimRing);
 
+// The throw distance set by the AR controller's tilt (Input.aim), -1
+// outside AR; read each frame.
+//
+let aimNow = -1;
+
+function readAim(): void {
+  const hand = controls.cfg.xr.action[0] as "left" | "right", tilt = ( ar.active ? ar.pitch[hand] : null ),
+        [lo, hi] = controls.cfg.throwPitch;
+  aimNow = ( (tilt === null) ? -1 : Math.max(0, Math.min(1, (tilt - lo) / (hi - lo))) );
+}
+
 function drawAim(w: World): void {
   const me = pred?.me;
   aimDots.count = 0;
   aimRing.visible = false;
   if ( !me || (me.carry !== Item.DYNAMITE) || (me.fuse < 0) || (me.aimT < TAP) || (me.dead > 0) ) { return; }
-  const r = CONFIG.rules, power = Math.min(1, me.aimT / Math.max(1e-6, r.throwHoldSeconds)),
+  const r = CONFIG.rules, power = throwPower(me.aimT, aimNow, r),
         path = flight(w, launch(w, 0, me.x, me.y, me.heading, power, r.throwRange, 0), 0.04, 4),
         n = Math.min(AIM_DOTS, path.length);
   for (let k = 0; k < n; k++) {
@@ -734,6 +913,7 @@ function rockFeedback(w: World, t: Terrain, i: number, broke: boolean): void {
           const c = new THREE.Color(h);
           return new THREE.Color(c.r * rt[0], c.g * rt[1], c.b * rt[2]);
         });
+  birds.disturb(x + 0.5, base, y + 0.5);
   if (!broke) { chips.burst(x + 0.5, base + 0.45, y + 0.5, 10, 1.2, cols, base); return; }
   chips.burst(x + 0.5, base + 0.25, y + 0.5, 36, 1.8, cols, base);
   chips.burst(x + 0.5, base + 0.1, y + 0.5, 14, 0.5, [new THREE.Color(BRICK_PALETTE[2])], base, 0.13);
@@ -752,11 +932,15 @@ function treeFeedback(w: World, t: Terrain, i: number, felled: boolean): void {
         wood = [tint(BARK), new THREE.Color(CUT), tint(BARK), new THREE.Color(CUT)],
         leaf = [tint(LEAF), tint(LEAF_LIT)];
   const n = ( felled ? 2.5 : 1 );
+  birds.disturb(x + 0.5, base, y + 0.5);
   chips.burst(x + 0.5, base + 0.3, y + 0.5, Math.round(9 * n), 1.3, wood, base, 0.07, { flat: 0.35 });
   chips.burst(x + 0.5, base + 0.75, y + 0.5, Math.round(6 * n), 0.7, leaf, base, 0.09, { flat: 0.15, gravity: 2.2, drag: 2.5, life: 1.0 });
 }
 
 function setupLevel(msg: Extract<ServerMsg, { t: "welcome" }>): void {
+  hush();
+  runSeed = msg.seed;
+  birds.reset();
   if (terrain) { content.remove(terrain.group); }
   const copy = () => {
     const w = World.fromData(msg.level);
@@ -782,6 +966,7 @@ function setupLevel(msg: Extract<ServerMsg, { t: "welcome" }>): void {
   line = world.line();
   myId = msg.id;
   const sim = new Game(world, { rules: CONFIG.rules, train: CONFIG.train, avatar: CONFIG.avatar, station: CONFIG.station, tickHz: CONFIG.server.tickHz }, 1, false);
+  sim.lobby = !!msg.info.lobby;
   if (pred) { pred.reset(sim, truth); }
   else      { pred = new Predictor(sim, truth); }
   interp.reset();
@@ -819,12 +1004,25 @@ function say(m: ClientMsg): void {
 // or while in a room, so one already on its way when the player left
 // (a new level) does not pull the page back in.
 //
+// ?lobby opens the walk-in lobby on the page too (for trying it out
+// without a headset).
+//
+const walkIn = params.has("lobby");
+
 let roomInfo: RoomInfo | null = null,
     wantRoom = (params.get("room") ?? "").trim().toUpperCase(),
     asked    = false;
 const leaveBtn = document.getElementById("leave") as HTMLButtonElement,
-      joinRoom = (code: string) => { asked = true; say({ t: "hello", name: lobby.playerName, room: code }); },
-      lobby    = new Lobby(urlName, joinRoom, o => { asked = true; say({ t: "create", name: lobby.playerName, ...o }); });
+      joinRoom = (code: string) => { asked = true; say({ t: "hello", name: lobby.playerName, room: code, character: lobby.character }); },
+      lobby    = new Lobby(urlName, joinRoom, o => { asked = true; say({ t: "create", name: lobby.playerName, character: lobby.character, ...o }); });
+
+// Into the walk-in lobby (server/lobby.ts), where AR players go: the
+// page's HTML lobby is not shown in the headset.
+//
+function toWalkIn(): void {
+  asked = true;
+  say({ t: "lobby", name: lobby.playerName, character: lobby.character });
+}
 if (wantRoom) { lobby.hide(); }
 
 function roomInUrl(code: string): void {
@@ -838,6 +1036,7 @@ function roomInUrl(code: string): void {
 // for; `text` says why, if it was not the player's choice.
 //
 function toLobby(text = ""): void {
+  hush();
   roomInfo = null;
   wantRoom = "";
   asked    = false;
@@ -847,6 +1046,10 @@ function toLobby(text = ""): void {
   content.visible = false;
   leaveBtn.style.display = "none";
   hud.textContent = "Lobby";
+  if (arOn) {
+    toWalkIn();
+    return;
+  }
   lobby.show();
   lobby.error(text);
   say({ t: "list" });
@@ -886,10 +1089,11 @@ function connect(): void {
     if      (wantRoom)  { joinRoom(wantRoom); }
     else if (autoMake)  {
       asked = true;
-      say({ t: "create", name: lobby.playerName, room: autoMake + " test", open: false, difficulty: autoMake,
+      say({ t: "create", name: lobby.playerName, character: lobby.character, room: autoMake + " test", open: false, difficulty: autoMake,
             levels: Number(params.get("levels") ?? 4), width: 10, length: 50 });
       autoMake = "";
     }
+    else if ( arOn || walkIn ) { toWalkIn(); }
     else                { hud.textContent = "Lobby"; lobby.show(); say({ t: "list" }); }
   };
   s.onclose   = () => { hud.textContent = "Disconnected from " + wsUrl + ". Retrying..."; setTimeout(reconnect, 1000); };
@@ -907,11 +1111,11 @@ function connect(): void {
       if ( !roomInfo && !asked ) { return; }
       asked    = false;
       roomInfo = m.info;
-      wantRoom = m.room;
-      roomInUrl(m.room);
+      wantRoom = ( m.info.lobby ? "" : m.room );
+      roomInUrl(wantRoom);
       lobby.hide();
       content.visible = true;
-      leaveBtn.style.display = "block";
+      leaveBtn.style.display = ( m.info.lobby ? "none" : "block" );
       for (const [sec, vals] of Object.entries(m.config)) {
         Object.assign((CONFIG as unknown as Record<string, object>)[sec], vals);
         for (const [k, v] of Object.entries(vals)) { showSetting(sec, k, v); }
@@ -940,6 +1144,7 @@ function connect(): void {
         const [, x, y, z] = e.split(":").map(Number);
         boom(x, y, z, timer.getElapsed());
       }
+      soundEvents(m.events, m.train.p);
 
       // On to the next level of the run (D6.4): the same world, the next
       // pair of stations. The train's place counts along the new level's
@@ -968,10 +1173,18 @@ connect();
 
 // ---- input ----
 
-const controls = new Controls(await loadBindings(), (open, pick) => {
-  menuEl.style.display = ( open ? "block" : "none" );
-  menuEl.innerHTML = EMOTES.map((e, k) => "<span class=\"" + ( (k === pick) ? "on" : "" ) + "\">" + e + "</span>").join("");
-});
+const controls = new Controls(await loadBindings(), (open, pick) => { showMenu(open, pick); });
+
+// The emote menu's ring: the word picked larger and gold.
+//
+function showMenu(open: boolean, pick: number): void {
+  menuRing.visible = open;
+  EMOTES.forEach((e, k) => {
+    const t = menuWords[k], a = (k * Math.PI) / 4;
+    t.set( open ? [{ parts: [{ text: e, colour: ( (k === pick) ? GOLD : undefined ) }], scale: ( (k === pick) ? 1.3 : 1 ) }] : [] );
+    t.group.position.set(Math.sin(a) * MENU_RX, (Math.cos(a) * MENU_RY) - (t.height / 2), 0);
+  });
+}
 
 // Input steps (D7.4): one every server tick, carrying the buttons held
 // and any one-off (boost, emote, tool change) since the last step.
@@ -1280,7 +1493,7 @@ function buildDev(): void {
   // For tools/shot.ts --js: the camera, its controls and the characters,
   // to look closely.
   //
-  (globalThis as unknown as Record<string, unknown>).voxelRail = { camera, orbit, avatars, me: () => myId };
+  (globalThis as unknown as Record<string, unknown>).voxelRail = { camera, orbit, avatars, me: () => myId, birds };
   const box = document.createElement("fieldset"), leg = document.createElement("legend");
   box.id = "devBox";
   leg.textContent = "dev (server --dev)";
@@ -1354,6 +1567,132 @@ function buildSettings(): void {
 // Called by the renderer's animation loop, which in AR runs at the
 // headset's rate and passes the XR frame.
 //
+// The level-end message (2026-11-19, in blocks, a few words a line):
+// what happened, the upgrade choice while it is open, and what comes
+// next with its seconds: the next level or the lobby.
+//
+const END_HEAD: Record<string, string> = { derailed: "DERAILED", timeout: "OUT OF TIME", arrived: "ARRIVED" };
+
+function endLines(st: State): TextLine[] {
+  if (!END_HEAD[st.phase]) { return []; }
+  const lastLevel = ( !!roomInfo && (roomInfo.level >= roomInfo.levels) ),
+        more      = ( (st.phase === "arrived") && !lastLevel ),
+        then      = ( more ? "NEXT LEVEL " : "LOBBY " );
+  return [ ( ( (st.phase === "arrived") && lastLevel ) ? "RUN COMPLETE" : END_HEAD[st.phase] ),
+           ( ( more && st.offers.length && !st.picked ) ? { parts: [{ text: "PICK UPGRADE", colour: GOLD }], scale: 0.7 } : "" ),
+           { parts: [{ text: then }, { text: String(Math.ceil(Math.max(0, st.next))), colour: GOLD }], scale: 0.8 } ];
+}
+
+// ---- sound (D11b) ----
+
+// Where the train's front is, in board units, with the train at line
+// position `p`.
+//
+function trainFront(w: World, p: number): Pt3 {
+  const k = Math.max(0, Math.min(line.length - 1, Math.floor(p)));
+  if (!line.length) { return { x: 0, y: 0, z: 0 }; }
+  const [x, y] = w.xy(line[k]);
+  return { x: x + 0.5, y: standY(w, x + 0.5, y + 0.5) + 0.5, z: y + 0.5 };
+}
+
+function avatarAt(id: number): Pt3 | null {
+  const a = avatars.get(id);
+  return ( a ? { x: a.x, y: a.h + 0.5, z: a.y } : null );
+}
+
+
+// What the server says happened: the train leaving sounds its horn, a
+// crash and a stick going off explode, a character against the train
+// sounds the horn, a bridge or a stair built rubs.
+//
+function soundEvents(events: string[], trainP: number): void {
+  const w = shown;
+  if (!w) { return; }
+  for (const e of events) {
+    const [kind, a, b, c] = e.split(":");
+    if      (kind === "start")    { hornAt = timer.getElapsed(); sounds.play("trainStart", trainFront(w, trainP)); const f = trainFront(w, trainP); birds.disturb(f.x, f.y, f.z); }
+    else if (kind === "derailed") { sounds.play("crash", trainFront(w, trainP)); }
+    else if (kind === "boom")     { sounds.play("blast", { x: Number(a), y: Number(c), z: Number(b) }); }
+    else if (kind === "bump")     { const at = avatarAt(Number(a)); if (at) { sounds.play("bump", at); } }
+    else if (kind === "built")    { const [x, y] = w.xy(Number(a)); sounds.play("built", { x: x + 0.5, y: standY(w, x + 0.5, y + 0.5), z: y + 0.5 }); }
+  }
+}
+
+// Every frame: the chug while the train runs (faster on fast-forward),
+// the horn more and more often as the train nears the end of track that
+// does not reach the end station, and chopping sounds, one random clip
+// after another, for each character chopping. Mining sounds come with
+// each swing's strike (mineStrike). Either fades out when they stop.
+//
+function drawSound(w: World, st: State, trainP: number, now: number): void {
+  const running = ( (st.phase === "running") && !roomInfo?.lobby ), front = trainFront(w, trainP);
+  if ( running && (!chug || chug.ended) ) { chug = sounds.play("trainRunning", front, { loop: true }); }
+  if (chug) {
+    if (running) {
+      chug.move(front);
+      chug.src.playbackRate.setTargetAtTime(( st.train.fast ? 1.5 : 1 ), 0, 0.3);
+    }
+    else {
+      chug.stop(0.8);
+      chug = null;
+    }
+  }
+  const [ex, ey] = w.end[w.end.length - 1], warn = CONFIG.view.hornWarnCells, ahead = (line.length - 0.5) - trainP;
+  if ( running && !line.includes(w.idx(ex, ey)) && (ahead < warn) ) {
+    const every = 0.35 + (1.65 * (Math.max(0, ahead) / Math.max(1e-3, warn)));
+    if ((now - hornAt) >= every) { hornAt = now; sounds.play("endWarning", front); }
+  }
+  for (const sp of st.players) {
+    const p = own(sp), set = ( ( p.hitting && !p.dead ) ? ( (p.tool === Tool.PICK) ? "mine" : ( (p.tool === Tool.AXE) ? "chop" : null ) ) : null ),
+          v = chops.get(p.id), at = avatarAt(p.id);
+    if ( set && at ) {
+      if ( (set === "chop") && ( !v || v.ended ) ) {
+        const nv = sounds.play(set, at);
+        if (nv) { chops.set(p.id, nv); }
+      }
+      else if (v) { v.move(at); }
+    }
+    else if (v) {
+      v.stop(0.3);
+      chops.delete(p.id);
+    }
+  }
+}
+
+// ---- weather and birds (D11.20, D11.21) ----
+
+// The run's climate, made again when the world or the weather settings
+// change (runSeed, climateKey, weatherWorld above).
+//
+
+function weatherFor(w: World): void {
+  const V = CONFIG.view, key = runSeed + ":" + w.w + ":" + V.rainChance + ":" + V.snowChance + ":" + V.weatherBlendCells + ":" + V.puddles;
+  if ( (key === climateKey) && (weatherWorld === w) ) { return; }
+  climateKey   = key;
+  weatherWorld = w;
+  const mids = w.stations.slice(1, -1).map(c => ( (c[0][0] + c[c.length - 1][0] + 1) / 2 ));
+  weather.setWorld(w, new Climate(runSeed, mids, V.rainChance, V.snowChance, V.weatherBlendCells), (x, z) => standY(w, x, z));
+}
+
+// Where a bird can stand on cell (x, z): on a tree's crown, on grey
+// rock, on the ground; not on water.
+//
+function perchAt(w: World, x: number, z: number): number | null {
+  if (!w.inside(x, z)) { return null; }
+  const i = w.idx(x, z), c = w.type(i);
+  if (c === Cell.WATER) { return ( w.bridge[i] ? standY(w, x + 0.5, z + 0.5) : null ); }
+  if ( (c === Cell.TREE) || (c === Cell.ROCK) ) { return ( topY(w.z(i)) + 0.5 ); }
+  return standY(w, x + 0.5, z + 0.5);
+}
+
+// A character or a train car within r cells of (x, z).
+//
+function nearThings(x: number, z: number, r: number): boolean {
+  for (const a of avatars.values()) { if (Math.hypot(a.x - x, a.y - z) < r) { return true; } }
+  for (const c of cars) { if (Math.hypot(c.position.x - x, c.position.z - z) < (r + 0.8)) { return true; } }
+  return false;
+}
+
 function frame(_time: number, xf?: XRFrame): void {
   perf.start = performance.now();
   timer.update();
@@ -1361,6 +1700,7 @@ function frame(_time: number, xf?: XRFrame): void {
   ar.update(xf);
   controls.xrPads = ar.pads;
   const f = controls.read();
+  readAim();
   if (f.help) { helpEl.style.display = ( (helpEl.style.display === "block") ? "none" : "block" ); }
   // Step the input at the server's tick rate: each step is numbered,
   // sent, and applied to this player's own character at once (D7.4).
@@ -1386,7 +1726,7 @@ function frame(_time: number, xf?: XRFrame): void {
           my     = clamp1((fwd.x * f.mx) + (fwd.z * -f.my));
     for (; stepAcc >= stepS; stepAcc -= stepS) {
       if ( !ws || (ws.readyState !== 1) || !pred ) { continue; }
-      const inp: Input = { mx, my, action: f.action, boost: oneBoost, emote: oneEmote, tool: oneTool, fast: f.fast };
+      const inp: Input = { mx, my, action: f.action, boost: oneBoost, emote: oneEmote, tool: oneTool, fast: f.fast, aim: aimNow };
       oneBoost = false; oneEmote = -1; oneTool = -1;
       say({ t: "input", seq: pred.step(inp), ...inp });
     }
@@ -1405,10 +1745,12 @@ function frame(_time: number, xf?: XRFrame): void {
         mine   = ( pred?.me ? pred.draw(stepAcc / stepS, dt) : null );
   const tr = ( pred?.me ? pred.sim.train : last.train );
   drawTrain({ ...tr, p: trainP });
-  drawPad(last.pad, last.phase, world, timer.getElapsed());
+  drawPad(last.pad, ( roomInfo?.lobby ? "lobby" : last.phase ), world, timer.getElapsed());
+  drawLobby(( last.lobby ?? [] ), world, timer.getElapsed());
   drawOffers(last.offers, world, timer.getElapsed());
   drawGroundWagons(world);
   drawBombs(world, dt, timer.getElapsed());
+  drawSound(world, last, trainP, timer.getElapsed());
   drawAim(world);
   drawColliders(world, last, trainP);
   drawGhost(world, last);
@@ -1421,6 +1763,17 @@ function frame(_time: number, xf?: XRFrame): void {
     const p = own(sp);
     seen.add(p.id);
     let a = avatars.get(p.id);
+
+    // A character changed (the walk-in lobby's character circles) is
+    // made again, where the old one stood.
+    //
+    if ( a && (a.character !== p.character) ) {
+      const old = a;
+      dropAvatar(p.id);
+      a = makeAvatar(p);
+      a.x = old.x; a.y = old.y; a.h = old.h; a.yaw = old.yaw;
+      avatars.set(p.id, a);
+    }
     if (!a) { a = makeAvatar(p); avatars.set(p.id, a); }
     const k  = Math.min(1, dt * 15), ox = a.x, oy = a.y,
           me = ( (p.id === myId) && mine && pred?.me ),
@@ -1462,7 +1815,20 @@ function frame(_time: number, xf?: XRFrame): void {
     const anim = ( p.dead ? "die" : ( p.hitting ? "attack-melee-right" : ( (a.moving > 0.5) ? ( p.boosting ? "sprint" : "walk" ) :
                  ( p.count ? "holding-both" : "idle" ) ) ) );
     play(a, anim);
+
+    // The swing runs view.swingsPerSecond times a second (2026-11-20);
+    // with the pickaxe, each strike plays one mine sound, picked at
+    // random (mining: chopping sounds run on regardless).
+    //
+    const swing = a.actions.get(SWING);
+    if (swing) { swing.timeScale = Math.max(0.1, CONFIG.view.swingsPerSecond) * swing.getClip().duration; }
     a.mixer.update(dt);
+    if ( swing && (a.current === SWING) && (p.tool === Tool.PICK) && !p.dead ) {
+      const d = swing.getClip().duration, t = swing.time % d;
+      if (passed(Math.max(0, a.swingT), t, SWING_STRIKE * d)) { mineStrike(p.id); }
+      a.swingT = t;
+    }
+    else { a.swingT = -1; }
 
     // Carried stack in the hands (D11a.3).
     //
@@ -1494,31 +1860,24 @@ function frame(_time: number, xf?: XRFrame): void {
       }
     }
 
-    // Name and emote above the head.
+    // Over the head, in blocks (2026-11-19), from the top down: a red X
+    // while an action is refused (taking out a tool with nowhere to put
+    // what is carried, D6a.20), the emote sent, a lit stick's whole
+    // seconds left, and the player's name. Lines are stacked from the
+    // bottom, so the name stays put and the rest stand on it.
     //
-    const v = new THREE.Vector3(a.x, a.h + 1.05, a.y).project(camera);
-    a.label.style.left = (((v.x + 1) / 2) * innerWidth) + "px";
-    a.label.style.top  = (((1 - v.y) / 2) * innerHeight) + "px";
-    a.label.textContent = p.name + ( (p.tool !== Tool.NONE) ? (" [" + TOOL_NAMES[p.tool] + "]") : "" ) +
-                          ( ( (p.carry === Item.DYNAMITE) && (p.fuse >= 0) ) ? (" [fuse " + p.fuse.toFixed(1) + " s]") : "" ) +
-                          ( (p.emote >= 0) ? (" — " + EMOTES[p.emote]) : "" );
-    a.label.style.display = ( (v.z < 1) ? "block" : "none" );
-
-    // A refused action (taking out a tool with nowhere to put what is
-    // carried) flashes a red cross over the character (D6a.20).
-    //
-    const vd = new THREE.Vector3(a.x, a.h + 0.8, a.y).project(camera);
-    a.deny.style.left    = (((vd.x + 1) / 2) * innerWidth) + "px";
-    a.deny.style.top     = (((1 - vd.y) / 2) * innerHeight) + "px";
-    a.deny.style.display = ( (p.denied && (vd.z < 1)) ? "block" : "none" );
-    a.tag.set( arOn ? ( ( p.denied ? "\u2715 " : "" ) + a.label.textContent ) : "", ( p.denied ? "#ff6060" : "#ffffff" ) );
-    a.tag.sprite.position.set(a.x, a.h + 1.25, a.y);
+    const lit = ( (p.carry === Item.DYNAMITE) && (p.fuse >= 0) );
+    a.over.set([ ( p.denied ? { parts: [{ text: "X", colour: RED_TEXT }], scale: 1.6 } : "" ),
+                 ( (p.emote >= 0) ? { parts: [{ text: EMOTES[p.emote], colour: GOLD }] } : "" ),
+                 ( lit ? { parts: [{ text: String(Math.ceil(p.fuse)), colour: RED_TEXT }], scale: 1.6 } : "" ),
+                 { parts: [{ text: shownName(p.name) }], scale: NAME_SCALE } ]);
+    a.over.group.position.set(a.x, a.h + ( ( (p.id === myId) && controls.menu ) ? 2.05 : 1.15 ), a.y);
 
     if (p.id === myId) { myPos.set(a.x, a.h, a.y); }
   }
   for (const [id, a] of avatars) {
     if (seen.has(id)) { continue; }
-    content.remove(a.root, a.tag.sprite, a.edge); a.label.remove(); a.deny.remove(); avatars.delete(id);
+    dropAvatar(id);
   }
 
   // Camera (D2.3, D2.7): left drag orbits, wheel zooms, right drag
@@ -1589,6 +1948,13 @@ function frame(_time: number, xf?: XRFrame): void {
   clipE.set(AXIS_W, centre.x + half).applyMatrix4(content.matrixWorld);
   terrain.setWindow(centre.x - half, centre.x + half);
 
+  // Weather and birds over the window (D11.20, D11.21).
+  //
+  weatherFor(world);
+  weather.update(dt, centre.x - half, centre.x + half, arOn);
+  birds.update(dt, { x0: centre.x - half, x1: centre.x + half, depth: world.h, perch: (x, z) => perchAt(world!, x, z),
+                     near: (x, z, r) => nearThings(x, z, r) });
+
   // A character outside the window shows as a marker on the window's
   // edge, at its row and height, pointing out toward it (D2.5).
   //
@@ -1603,31 +1969,20 @@ function frame(_time: number, xf?: XRFrame): void {
     a.edge.scale.setScalar(1 + (0.12 * Math.sin(timer.getElapsed() * 5)));
   }
 
-  // AR text: the emote menu over this player's character, and the
-  // level-end message over the middle of the board.
-  //
-  arMenu.set( ( arOn && controls.menu ) ? EMOTES.map((e, k) => ( (k === controls.pick) ? ("[" + e + "]") : e )).join("  ") : "" );
-  arMenu.sprite.position.set(myPos.x, myPos.y + 1.7, myPos.z);
+  menuRing.position.set(myPos.x, myPos.y + 1.05, myPos.z);
 
-  // Level end: a large message with the wait until the next level.
+  // The level-end message, or in AR, while the board is being placed,
+  // how to put it down.
   //
-  const endText: Record<string, string> = { derailed: "Derailed!", timeout: "Out of time", arrived: "Arrived!" };
-  if (endText[last.phase]) {
-    banner.style.display = "block";
-    const lastLevel = ( !!roomInfo && (roomInfo.level >= roomInfo.levels) ),
-          picked    = ( last.picked ? (upgrade(last.picked)?.label ?? last.picked) + " taken. " : "" ),
-          choose    = ( last.offers.length ? "Pick an upgrade. " : "" ),
-          then      = ( ( (last.phase === "arrived") && !lastLevel ) ? "Next level" : "Back to the lobby" );
-    banner.textContent = ( ( (last.phase === "arrived") && lastLevel ) ? "Run complete!" : endText[last.phase] ) + "  " +
-                         ( (last.phase === "arrived") ? (picked + choose) : "Game over. " ) +
-                         then + " in " + Math.ceil(Math.max(0, last.next)) + " s";
-  }
-  else { banner.style.display = "none"; }
-  // While the AR board is being placed it says how to put it down.
+  msgText.set( ( arOn && !ar.placed ) ? ["LOOK AT TABLE"] : endLines(last) );
+  msgText.group.position.set(centre.x, 1.6, centre.z);
+
+  // The seconds until the train leaves, over the start pad, above what
+  // is shown over the heads of whoever stands in it.
   //
-  const placing = ( arOn && !ar.placed );
-  arBanner.set( placing ? "Look at a table to place the board" : ( ( arOn && endText[last.phase] ) ? banner.textContent! : "" ) );
-  arBanner.sprite.position.set(centre.x, 4, centre.z);
+  const leaves = ( (last.phase === "waiting") ? Math.ceil(Math.max(0, CONFIG.train.startDelay - (last.time - last.startT))) : 0 );
+  leaveText.set( (leaves > 0) ? [String(leaves)] : [] );
+  leaveText.group.position.set(last.pad.x, standY(world, last.pad.x, last.pad.y) + 2.7, last.pad.y);
 
   // The derailment shake moves the camera on the page and the level on
   // the AR board (the viewer's own head is not ours to move), only for
@@ -1660,8 +2015,33 @@ function frame(_time: number, xf?: XRFrame): void {
     "carrying: " + ( me && me.count ? (me.count + " " + ITEM_NAMES[me.carry]) : "nothing" ) +
     ( ( me && (me.carry === Item.DYNAMITE) ) ?
       ( (me.fuse < 0) ? " (press to light; beside the dynamite wagon, to put it back)" :
-                        (" (fuse " + me.fuse.toFixed(1) + " s: tap to put it down, hold to throw)") ) : "" ) +
+                        (" (fuse " + me.fuse.toFixed(1) + " s: tap to put it down, hold to throw" +
+                         ( (aimNow >= 0) ? ", tilt the controller up to throw farther)" : ", the longer the farther)" )) ) : "" ) +
     "   holding: " + ( me ? TOOL_NAMES[me.tool] : "-" ) + "   camera: " + CAM_MODES[camMode] + "   (? for keys)\n" + perfLine();
+
+  // Every text in blocks turns to the viewer.
+  //
+  const viewCam = ( arOn ? renderer.xr.getCamera() : camera ),
+        eyeW    = viewCam.getWorldPosition(new THREE.Vector3()),
+        eye     = content.worldToLocal(eyeW.clone());
+
+  // The ear is this player's character (else the middle of the view);
+  // left and right as the view looks.
+  //
+  const rightL = content.worldToLocal(new THREE.Vector3(1, 0, 0).applyQuaternion(viewCam.getWorldQuaternion(new THREE.Quaternion())).add(eyeW)).sub(eye);
+  sounds.listen(( avatarAt(myId) ?? { x: centre.x, y: 0, z: centre.z } ), { x: rightL.x, z: rightL.z });
+  sounds.update();
+  for (const t of [msgText, leaveText, ...bombTexts, ...[...avatars.values()].map(a => a.over)]) { t.face(eye); }
+
+  // The lobby's words turn with their circle's group, which stands still.
+  //
+  for (const v of lobbyViews.values()) {
+    const g = v.group.position;
+    v.text.group.rotation.y = Math.atan2(eye.x - g.x, eye.z - g.z);
+  }
+  menuRing.rotation.y = Math.atan2(eye.x - menuRing.position.x, eye.z - menuRing.position.z);
+  menuRing.position.x += Math.sin(menuRing.rotation.y) * 0.7;
+  menuRing.position.z += Math.cos(menuRing.rotation.y) * 0.7;
 
   renderer.info.reset();
   draw();

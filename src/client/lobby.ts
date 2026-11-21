@@ -9,11 +9,12 @@
 // open rooms (the page asks the server every few seconds while it is
 // shown), joins one from the list or by code, and makes a new room with
 // its options: name, listed or by code only, number of levels, level
-// width and length, and difficulty. The player's name is kept in the
-// browser for next time.
+// width and length, and difficulty. The player's name and character
+// (2026-11-20) are kept in the browser for next time. AR players get the
+// walk-in lobby instead (server/lobby.ts), with the same character kept.
 //
 
-import { ROOM_LIMITS, type RoomsMsg, type RoomInfo } from "../net/protocol.ts";
+import { ROOM_LIMITS, CHARACTERS, type RoomsMsg, type RoomInfo } from "../net/protocol.ts";
 
 export interface CreateOptions {
   room       : string;
@@ -24,7 +25,16 @@ export interface CreateOptions {
   difficulty : string;
 }
 
-const NAME_KEY = "voxel-rail.name";
+const NAME_KEY = "voxel-rail.name",
+      CHAR_KEY = "voxel-rail.character";
+
+function stored(key: string): string {
+  try { return ( localStorage.getItem(key) ?? "" ); } catch { return ""; }
+}
+
+function store(key: string, v: string): void {
+  try { localStorage.setItem(key, v); } catch { }
+}
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, text = "", cls = ""): HTMLElementTagNameMap[K] {
   const e = document.createElement(tag);
@@ -49,6 +59,8 @@ export class Lobby {
   list    : HTMLTableSectionElement;
   code    : HTMLInputElement;
   msg     : HTMLDivElement;
+  picks   : HTMLButtonElement[];
+  private chosen = "";
   form    : { room: HTMLInputElement, open: HTMLInputElement, levels: HTMLInputElement, width: HTMLInputElement,
               length: HTMLInputElement, difficulty: HTMLSelectElement };
   private filled = false;
@@ -66,13 +78,25 @@ export class Lobby {
     this.root.append(el("h1", "voxel-rail"));
     this.name = el("input");
     this.name.maxLength = 24;
-    let saved = "";
-    try { saved = localStorage.getItem(NAME_KEY) ?? ""; } catch { saved = ""; }
-    this.name.value = ( saved || defaultName );
-    this.name.addEventListener("change", () => { try { localStorage.setItem(NAME_KEY, this.playerName); } catch { } });
+    this.name.value = ( stored(NAME_KEY) || defaultName );
+    this.name.addEventListener("change", () => store(NAME_KEY, this.playerName));
     const nameRow = el("label", "Your name ");
     nameRow.append(this.name);
     this.root.append(nameRow);
+
+    // Character: one button each, the one picked lit; none picked, the
+    // server deals one out.
+    //
+    const charRow = el("div", "", "row chars");
+    charRow.append(el("span", "Character"));
+    this.picks = CHARACTERS.map(ch => {
+      const b = el("button", ch[0].toUpperCase() + ch.slice(1));
+      b.addEventListener("click", () => this.pick(ch));
+      charRow.append(b);
+      return b;
+    });
+    this.root.append(charRow);
+    this.pick(stored(CHAR_KEY), false);
 
     // Open rooms.
     //
@@ -149,6 +173,17 @@ export class Lobby {
     this.msg = el("div", "", "msg");
     this.root.append(this.msg);
     document.body.append(this.root);
+  }
+
+  // The character picked ("" none), kept in the browser.
+  //
+  get character(): string { return this.chosen; }
+
+  pick(ch: string, keep = true): void {
+    if (!CHARACTERS.includes(ch)) { return; }
+    this.chosen = ch;
+    if (keep) { store(CHAR_KEY, ch); }
+    this.picks.forEach((b, k) => b.classList.toggle("on", (CHARACTERS[k] === ch)));
   }
 
   get playerName(): string { return ( this.name.value.trim().slice(0, 24) || "player" ); }

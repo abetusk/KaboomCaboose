@@ -15,16 +15,16 @@
 import { CONFIG } from "../src/config.ts";
 import { DEFAULTS } from "../src/gen/generate.ts";
 import { generateRun } from "../src/gen/run.ts";
-import { testRun, testPiles, testLength } from "../src/gen/testrun.ts";
+import { testRun, testPiles, testTrack, testTrain, testLength } from "../src/gen/testrun.ts";
 import { World } from "../src/sim/world.ts";
 import { Game, type Input, type Settings } from "../src/sim/game.ts";
-import { SHARED_SECTIONS, type ServerMsg, type PlayerView, type RoomInfo } from "../src/net/protocol.ts";
+import { SHARED_SECTIONS, CHARACTERS, type ServerMsg, type State, type PlayerView, type RoomInfo } from "../src/net/protocol.ts";
 import type { WebSocket } from "../vendor/ws/wrapper.mjs";
 import type { Lag } from "./lag.ts";
 import { applyDifficulty } from "./difficulty.ts";
 import { devCommand } from "./dev.ts";
 
-export const CHARACTERS = ["knight", "zombie", "robot"];
+export { CHARACTERS };
 
 // What a room is made with (D7.6): its name, whether it is listed, the
 // number of levels in a run, a difficulty set (config/difficulty.json),
@@ -52,6 +52,10 @@ export interface Client {
   queue : { seq: number, inp: Input }[];
   held  : Input;
   ack   : number;
+
+  // The character this player picked (CHARACTERS), if any.
+  //
+  character? : string;
 }
 
 // A tick applies one waiting input per player, or more (up to
@@ -152,17 +156,22 @@ export class Room {
   // panel may have changed the level generator's); throws if it cannot
   // be made.
   //
-  private newRun(): Game {
+  protected newRun(): Game {
     const rules = this.cfg.rules as { C: number, bridgeTrees: number },
           gen   = { ...DEFAULTS, ...this.cfg.levelgen, C: rules.C, bridgeTrees: rules.bridgeTrees, seed: this.seed },
           test  = (this.difficulty === "test"),
           t0    = performance.now(),
           run   = ( test ? testRun(this.levels, gen.width, gen.stationLength) : generateRun(gen, this.levels) ),
           w     = new World(run.grid);
-    if (test) { testPiles(w); }
+    if (test) {
+      testPiles(w);
+      testTrack(w);
+    }
     this.log( (test ? "test run of" : "run of"), this.levels, "levels, seed", this.seed, "size", run.grid.w + "x" + run.grid.h,
              "made in", (performance.now() - t0).toFixed(0), "ms");
-    return new Game(w, this.settings, this.seed);
+    const game = new Game(w, this.settings, this.seed);
+    if (test) { testTrain(game); }
+    return game;
   }
 
   info(): RoomInfo {
@@ -178,7 +187,7 @@ export class Room {
     c.room = this;
     this.clients.set(c.id, c);
     this.emptyWall = -1;
-    if (!this.game.players.has(c.id)) { this.game.addPlayer(c.id, name, CHARACTERS[(c.id - 1) % CHARACTERS.length]); }
+    if (!this.game.players.has(c.id)) { this.game.addPlayer(c.id, name, ( c.character ?? CHARACTERS[(c.id - 1) % CHARACTERS.length] )); }
     this.welcome(c);
   }
 
@@ -214,6 +223,11 @@ export class Room {
     }));
   }
 
+  // What a kind of room adds to its state (the walk-in lobby: its
+  // circles).
+  //
+  protected extra(): Partial<State> { return {}; }
+
   tick(): void {
     const game = this.game, inputs = new Map<number, Input[]>();
     for (const c of this.clients.values()) {
@@ -243,7 +257,7 @@ export class Room {
     const next = ( (this.endWall < 0) ? -1 : Math.max(0, this.endWait() - ((Date.now() - this.endWall) / 1000)) );
     const msg: ServerMsg = { t: "state", time: game.time, startT: game.startT, limit: game.limit, phase: game.phase, train: game.train,
                              pad: game.pad, seg: game.w.seg, offers: game.offers, picked: game.picked, taken: game.taken, bombs: game.bombs, players: this.view(), cells,
-                             events: game.events, next };
+                             events: game.events, next, ...this.extra() };
     game.events = [];
     const text = JSON.stringify(msg);
     for (const c of this.clients.values()) { sendText(c, text); }

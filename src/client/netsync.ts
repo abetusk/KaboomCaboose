@@ -91,6 +91,17 @@ export class Predictor {
   private apply(me: Player, inp: Input): void {
     if (me.dead > 0) { return; }
     this.sim.stepPlayer(me, inp);
+
+    // While the train stands still this copy of it is the server's, so
+    // its push is foreseen too: track laid next to it can turn the line
+    // into the character, and the server then pushes them aside at the
+    // end of the tick (2026-11-20). A moving train's push is left to the
+    // server (this copy is behind it).
+    //
+    if (this.sim.train.v === 0) {
+      this.sim.shapeTrain();
+      this.sim.trainPush(me);
+    }
     this.sim.events = [];
     this.sim.bombs  = [];
   }
@@ -109,7 +120,7 @@ export class Predictor {
     const me: Player = {
       id: v.id, name: v.name, character: v.character, x: v.x, y: v.y, level: v.level, facing: v.facing, heading: v.heading,
       carry: v.carry as ItemKind, count: v.count, hitT: v.hitT, hitting: v.hitting, boostT: v.boostT, boostCd: v.boostCd,
-      dead: ( v.dead ? 1 : 0 ), emote: v.emote, emoteT: v.emoteT, lastAction: v.lastAction, lastCell: v.lastCell, wedgeT: 0,
+      dead: ( v.dead ? 1 : 0 ), emote: v.emote, emoteT: v.emoteT, lastAction: v.lastAction, lastCell: v.lastCell, wedgeT: 0, bumpAt: -1e9,
       tool: v.tool, denyT: v.denyT, fuse: v.fuse, aimT: v.aimT,
     };
     for (const e of this.pending) { this.apply(me, e.inp); }

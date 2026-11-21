@@ -37,10 +37,26 @@ export interface Pad {
 
 export const PAD_RADIUS = 0.6;
 
+// Seconds between one character's "bump" events (Game.bump).
+//
+export const BUMP_SECONDS = 1.5;
+
 // A press with a lit stick shorter than this many seconds puts it down
 // instead of throwing it (D6.12).
 //
 export const TAP = 0.25;
+
+// How far a lit stick goes when the action is let go after aimT seconds
+// of aiming: 0 puts it down at the feet (a tap), up to 1 for
+// rules.throwRange. With an aim control (Input.aim) its value sets the
+// distance, at least one cell (launch()); without, the press's length
+// does, full after rules.throwHoldSeconds.
+//
+export function throwPower(aimT: number, aim: number | undefined, r: { throwHoldSeconds: number }): number {
+  if (aimT < TAP) { return 0; }
+  if ( (aim !== undefined) && (aim >= 0) ) { return Math.max(1e-3, Math.min(1, aim)); }
+  return Math.min(1, aimT / Math.max(1e-6, r.throwHoldSeconds));
+}
 
 // An upgrade on offer at a station (D6.7): a circle like the start pad,
 // picked by standing in it for station.dwellSeconds.
@@ -75,6 +91,13 @@ export interface Input {
   emote  : number;
   tool   : number;
   fast?  : boolean;
+
+  // How far to throw a lit stick, 0 (nearest) to 1 (throwRange), from a
+  // control that sets it directly: the tilt of the AR controller
+  // (input.throwPitch, 2026-11-19). Absent or below 0: the length of the
+  // press sets it instead.
+  //
+  aim?   : number;
 
   // A tick with no input from the player's client (D7.4): the player
   // does nothing (no move, no press or hold; boost and hit timers
@@ -112,6 +135,11 @@ export interface Player {
   lastAction : boolean;
   lastCell   : number;
   wedgeT     : number;
+
+  // Game time of the last "bump" event (the character boosting into the
+  // train, for its horn, 2026-11-20).
+  //
+  bumpAt     : number;
   tool       : number;
   denyT      : number;
 
@@ -243,6 +271,11 @@ export class Game {
   //
   bombs    : Bomb[];
   bombId   : number;
+
+  // The walk-in lobby (server/lobby.ts, 2026-11-20): the start pad never
+  // starts a run, so the train stays put and no timer runs.
+  //
+  lobby    = false;
 
   // `fresh` sets the level up (the starting pile); a client making a Game
   // over its copy of the world only to ask plan() passes false.
@@ -511,7 +544,7 @@ export class Game {
     const p: Player = {
       id, name, character, x: 0, y: 0, level: 0, facing: 1, heading: 0, carry: Item.NONE, count: 0,
       hitT: 0, hitting: false, boostT: 0, boostCd: 0, dead: 0, emote: -1, emoteT: 0, lastAction: false,
-      lastCell: -1, wedgeT: 0, tool: Tool.NONE, denyT: 0, fuse: -1, aimT: -1,
+      lastCell: -1, wedgeT: 0, bumpAt: -1e9, tool: Tool.NONE, denyT: 0, fuse: -1, aimT: -1,
     };
     this.respawn(p);
     this.players.set(id, p);
@@ -786,6 +819,16 @@ export class Game {
   // `solidTrain`: walking cannot go deeper into the train (D6a.19); only
   // the train's own push (collide) moves characters without that check.
   //
+  // A boosting character ran into the train: a "bump" event (the client
+  // sounds the horn), at most one per BUMP_SECONDS. Walking into it, or
+  // the train pushing a character, makes none (2026-11-20).
+  //
+  bump(p: Player): void {
+    if ( (p.boostT <= 0) || ((this.time - p.bumpAt) < BUMP_SECONDS) ) { return; }
+    p.bumpAt = this.time;
+    this.events.push("bump:" + p.id);
+  }
+
   move(p: Player, dx: number, dy: number, solidTrain = true): void {
     const r = this.s.avatar.radius, boosting = (p.boostT > 0);
     for (const axis of [0, 1]) {
@@ -814,7 +857,7 @@ export class Game {
       }
       if (solidTrain) {
         const pen = this.trainPen(p);
-        if ( (pen > 0) && (pen > (pen0 + 1e-9)) ) { p.x = ox; p.y = oy; }
+        if ( (pen > 0) && (pen > (pen0 + 1e-9)) ) { p.x = ox; p.y = oy; this.bump(p); }
       }
     }
 
@@ -880,12 +923,16 @@ export class Game {
     return ( (c === Cell.TREE) ? Item.WOOD : ( (c === Cell.ROCK) ? Item.ORE : Item.NONE ) );
   }
 
-  // A wagon is carried one at a time (D6.7); anything else up to
-  // rules.carryMax.
+  // A wagon or a dynamite stick is carried one at a time (D6.7, D6.12);
+  // anything else up to rules.carryMax.
   //
+  holdMax(kind: ItemKind): number {
+    return ( ( wagonOf(kind) || (kind === Item.DYNAMITE) ) ? 1 : this.s.rules.carryMax );
+  }
+
   give(p: Player, kind: ItemKind, n: number): number {
     if ( (p.carry !== Item.NONE) && (p.carry !== kind) ) { return 0; }
-    const take = Math.min(n, ( ( wagonOf(kind) || (kind === Item.DYNAMITE) ) ? 1 : this.s.rules.carryMax ) - p.count);
+    const take = Math.min(n, this.holdMax(kind) - p.count);
     if (take <= 0) { return 0; }
     p.carry = kind;
     p.count += take;
@@ -926,16 +973,18 @@ export class Game {
 
       // A stack of wood, ore or track on the cell where the next piece of
       // the line goes (D6a.27). With one piece in hand, the piece is laid
-      // there and the stack comes into the hands (`take`), if the hands
-      // can hold it all. With more pieces, hands and stack swap; a pile
-      // of track meets track in hand as any stack does.
+      // there and the stack comes into the hands (`take`). With more
+      // pieces, hands and stack swap; a pile of track meets track in hand
+      // as any stack does. Either way only if the hands can hold the whole
+      // stack (2026-11-19: a swap used to hand over a stack of any size).
       //
       const end = this.lineEnd();
       const stacked = (i: number): Plan | null => {
         if ( (i < 0) || !w.stack[i] || !w.walkable(i) || w.track[i] || (w.type(i) === Cell.STATION) ) { return null; }
         const dirs = w.joinDirs(i, end);
         if (!dirs.some(d => (w.step(i, d) === end))) { return null; }
-        if ( (count === 1) && (w.count[i] <= this.s.rules.carryMax) ) {
+        if (w.count[i] > this.holdMax(w.stack[i] as ItemKind)) { return null; }
+        if (count === 1) {
           let conn = 0;
           for (const d of dirs) { conn |= (1 << d); }
           return { kind: "track", cell: i, conn, dir: -1, z: w.z(i), take: true };
@@ -1110,6 +1159,7 @@ export class Game {
       if (w.type(pl.cell) !== Cell.WATER) { w.g.cells[pl.cell] = Cell.GROUND; }
       w.touch(pl.cell);
       this.spend(p, this.s.rules.bridgeTrees);
+      this.events.push("built:" + pl.cell);
       return;
     }
     if (pl && (pl.kind === "ramp")) {
@@ -1117,10 +1167,13 @@ export class Game {
       w.g.dir[pl.cell]   = pl.dir;
       w.touch(pl.cell);
       this.spend(p, 1);
+      this.events.push("built:" + pl.cell);
       return;
     }
 
-    // Stacks, on the cell the character stands on (D6a.14).
+    // Stacks, on the cell the character stands on (D6a.14). Empty hands
+    // take what they can hold; the same kind goes onto the stack; another
+    // kind swaps with the stack only if the hands can hold all of it.
     //
     if (w.stack[c]) {
       const kind = w.stack[c] as ItemKind;
@@ -1131,10 +1184,13 @@ export class Game {
         w.count[c] += p.count;
         this.dropAll(p);
       }
-      else {
+      else if (w.count[c] <= this.holdMax(kind)) {
         const k2 = p.carry, n2 = p.count;
         p.carry = kind; p.count = w.count[c];
         w.stack[c] = k2; w.count[c] = n2;
+      }
+      else {
+        return;
       }
       if (!w.count[c]) { w.stack[c] = Item.NONE; }
       w.touch(c);
@@ -1269,9 +1325,8 @@ export class Game {
   // A stick in hand. Unlit: a press beside the dynamite wagon puts it
   // back, anywhere else lights it. Lit: a press starts aiming; let go
   // after less than TAP seconds and it is put down at the feet, later and
-  // it is thrown the way the character faces, the farther the longer the
-  // press (full after rules.throwHoldSeconds). Its fuse burns on in the
-  // game's tick (fuses()).
+  // it is thrown the way the character faces, as far as throwPower()
+  // says. Its fuse burns on in the game's tick (fuses()).
   //
   stick(p: Player, inp: Input): void {
     const down = ( inp.action && !p.lastAction ), r = this.s.rules, tr = this.train;
@@ -1290,7 +1345,7 @@ export class Game {
     if (down) { p.aimT = 0; return; }
     if ( inp.action && (p.aimT >= 0) ) { p.aimT += this.dt; return; }
     if ( !inp.action && (p.aimT >= 0) ) {
-      const power = ( (p.aimT < TAP) ? 0 : Math.min(1, p.aimT / Math.max(1e-6, r.throwHoldSeconds)) );
+      const power = throwPower(p.aimT, inp.aim, r);
       this.bombs.push(launch(this.w, this.bombId++, p.x, p.y, p.heading, power, r.throwRange, p.fuse));
       this.events.push( ( (power > 0) ? "throw:" : "place:" ) + p.id );
       this.dropAll(p);
@@ -1387,52 +1442,59 @@ export class Game {
     }
   }
 
+  // The train's push on one character (collide): `qs` the train's body
+  // (trainBody). The client predicts it for its own character while the
+  // train stands still (src/client/netsync.ts).
+  //
+  trainPush(p: Player, qs = trainBody(this.w, this.line, this.train.p, this.s.train.collideRadius, this.train.cars.length)): void {
+    const a = this.s.avatar, dt = this.dt, r = a.radius, R = this.s.train.collideRadius;
+
+    // Sum the pushes of every circle touching the character: sideways
+    // from the track, toward the character's side, weighted by depth.
+    //
+    let sx = 0, sy = 0, deep = 0, hx = 0, hy = 0;
+    for (const pose of qs) {
+      const dx = p.x - pose.x, dy = p.y - pose.y, depth = (R + r) - Math.hypot(dx, dy);
+      if (depth <= 0) { continue; }
+      const nx = -Math.sin(pose.heading), ny = Math.cos(pose.heading),
+            side = ( (((dx * nx) + (dy * ny)) >= 0) ? 1 : -1 );
+      sx += nx * side * depth; sy += ny * side * depth;
+      if (depth > deep) { deep = depth; hx = Math.cos(pose.heading); hy = Math.sin(pose.heading); }
+    }
+    if (deep <= 0) { p.wedgeT = 0; return; }
+
+    // One capped push per tick, in the first direction that is free and
+    // does not take the character deeper into the train: straight away
+    // from the train, away and ahead along the track, ahead along the
+    // track. A character squeezed toward a wall slides out along it;
+    // one held pinned for wedgeSeconds dies.
+    //
+    const len = Math.hypot(sx, sy) || 1, ux = sx / len, uy = sy / len,
+          step = Math.min(deep, a.pushSpeed * dt) + 1e-4,
+          dirs = [[ux, uy], [ux + hx, uy + hy], [hx, hy]];
+    let stuck = true;
+    for (const [vx, vy] of dirs) {
+      const vl = Math.hypot(vx, vy) || 1, bx = p.x, by = p.y, pen0 = this.trainPen(p);
+      this.move(p, (vx / vl) * step, (vy / vl) * step, false);
+      if (p.dead > 0) { break; }
+      if (this.trainPen(p) > (pen0 + 1e-9)) { p.x = bx; p.y = by; continue; }
+      if (Math.hypot(p.x - bx, p.y - by) >= (step * 0.5)) { stuck = false; break; }
+    }
+    if (p.dead > 0) { return; }
+    p.wedgeT = ( stuck ? (p.wedgeT + dt) : 0 );
+    if ( (p.dead <= 0) && (p.wedgeT >= a.wedgeSeconds) ) { p.wedgeT = 0; this.kill(p); }
+  }
+
   // ---- collisions (D6a.16) ----
 
   // The train pushes characters aside; one that cannot get out of the way
   // dies. Characters push each other apart softly.
   //
   collide(): void {
-    const a = this.s.avatar, dt = this.dt, r = a.radius, R = this.s.train.collideRadius;
+    const a = this.s.avatar, dt = this.dt, r = a.radius;
     const ps = [...this.players.values()].filter(p => (p.dead <= 0));
-    const qs = trainBody(this.w, this.line, this.train.p, R, this.train.cars.length);
-    for (const p of ps) {
-
-      // Sum the pushes of every circle touching the character: sideways
-      // from the track, toward the character's side, weighted by depth.
-      //
-      let sx = 0, sy = 0, deep = 0, hx = 0, hy = 0;
-      for (const pose of qs) {
-        const dx = p.x - pose.x, dy = p.y - pose.y, depth = (R + r) - Math.hypot(dx, dy);
-        if (depth <= 0) { continue; }
-        const nx = -Math.sin(pose.heading), ny = Math.cos(pose.heading),
-              side = ( (((dx * nx) + (dy * ny)) >= 0) ? 1 : -1 );
-        sx += nx * side * depth; sy += ny * side * depth;
-        if (depth > deep) { deep = depth; hx = Math.cos(pose.heading); hy = Math.sin(pose.heading); }
-      }
-      if (deep <= 0) { p.wedgeT = 0; continue; }
-
-      // One capped push per tick, in the first direction that is free and
-      // does not take the character deeper into the train: straight away
-      // from the train, away and ahead along the track, ahead along the
-      // track. A character squeezed toward a wall slides out along it;
-      // one held pinned for wedgeSeconds dies.
-      //
-      const len = Math.hypot(sx, sy) || 1, ux = sx / len, uy = sy / len,
-            step = Math.min(deep, a.pushSpeed * dt) + 1e-4,
-            dirs = [[ux, uy], [ux + hx, uy + hy], [hx, hy]];
-      let stuck = true;
-      for (const [vx, vy] of dirs) {
-        const vl = Math.hypot(vx, vy) || 1, bx = p.x, by = p.y, pen0 = this.trainPen(p);
-        this.move(p, (vx / vl) * step, (vy / vl) * step, false);
-        if (p.dead > 0) { break; }
-        if (this.trainPen(p) > (pen0 + 1e-9)) { p.x = bx; p.y = by; continue; }
-        if (Math.hypot(p.x - bx, p.y - by) >= (step * 0.5)) { stuck = false; break; }
-      }
-      if (p.dead > 0) { continue; }
-      p.wedgeT = ( stuck ? (p.wedgeT + dt) : 0 );
-      if ( (p.dead <= 0) && (p.wedgeT >= a.wedgeSeconds) ) { p.wedgeT = 0; this.kill(p); }
-    }
+    const qs = trainBody(this.w, this.line, this.train.p, this.s.train.collideRadius, this.train.cars.length);
+    for (const p of ps) { this.trainPush(p, qs); }
     for (let i = 0; i < ps.length; i++) {
       for (let j = i + 1; j < ps.length; j++) {
         const p = ps[i], q = ps[j];
@@ -1476,7 +1538,7 @@ export class Game {
     this.train.fast = ( this.line.includes(endCell) ||
                         [...this.players.values()].some(p => ( !p.dead && listOf(p.id).some(i => (i.fast === true)) )) );
     if (!this.ended()) {
-      this.stepPad();
+      if (!this.lobby) { this.stepPad(); }
       this.stepCrafting();
       this.stepTrain();
     }

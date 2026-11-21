@@ -16,7 +16,7 @@ import { Cell } from "../src/level/cells.ts";
 import { NO_INPUT } from "../src/sim/game.ts";
 import { Room, type Client } from "../server/room.ts";
 import { Lag } from "../server/lag.ts";
-import { TEST_PILE, TEST_PILES, TEST_GAP, testLength } from "../src/gen/testrun.ts";
+import { TEST_PILE, TEST_PILES, TEST_GAP, TEST_STICKS, TEST_BACK, testLength } from "../src/gen/testrun.ts";
 import type { ServerMsg } from "../src/net/protocol.ts";
 
 function client(id: number): Client & { got: ServerMsg[] } {
@@ -31,7 +31,7 @@ test("the test run: flat, grey rock along the top, trees along the bottom, track
   const r = new Room("TEST", OPTS, 1), w = r.game.w;
   assert.equal(w.segments, 3);
   const L = testLength(6);
-  assert.equal(w.w, L + (2 * (L - 6 - 2)));
+  assert.equal(w.w, TEST_BACK + L + (2 * (L - 6 - 2)));
   assert.equal(r.info().length, L);
   for (let k = 0; k < (w.stations.length - 1); k++) {
     assert.equal(w.stations[k + 1][0][0] - w.stations[k].at(-1)![0] - 1, TEST_GAP, "cells of track between stations");
@@ -57,6 +57,30 @@ test("the test run: flat, grey rock along the top, trees along the bottom, track
     const n = [[1, -1], [2, -1]].filter(([dx, dy]) => ( (w.stack[w.idx(x + dx, y + dy)] === Item.TRACK) &&
                                                                        (w.count[w.idx(x + dx, y + dy)] === TEST_PILE) )).length;
     assert.equal(n, TEST_PILES);
+  }
+});
+
+test("the test run's train has a dynamite wagon holding a stick, on track and reachable, after a restart too", () => {
+  const r = new Room("TEST", OPTS, 1);
+  for (let k = 0; k < 2; k++) {
+    const g = r.game, w = g.w, car = g.train.cars.length - 1;
+    assert.equal(g.train.cars[car], "dynamite");
+    assert.equal(g.train.cars.filter(c => (c === "dynamite")).length, 1);
+    assert.equal(g.train.sticks, TEST_STICKS);
+    assert.equal(g.taken["dynamiteWagon"], 1);
+
+    // The wagon stands on cells of the line, and empty hands beside it
+    // take a stick.
+    //
+    const cells = [] as number[];
+    for (let i = 0; i < (w.w * w.h); i++) { if (g.carAt(i) === car) { cells.push(i); } }
+    assert.ok(cells.length > 0, "the dynamite wagon covers a cell");
+    const [x, y] = w.xy(cells[0]), p = g.addPlayer(9, "t", "knight");
+    p.x = x + 0.5; p.y = y - 0.6;
+    g.press(p);
+    assert.deepEqual([p.carry, p.count, g.train.sticks], [Item.DYNAMITE, 1, TEST_STICKS - 1]);
+    g.removePlayer(9);
+    r.restart();
   }
 });
 

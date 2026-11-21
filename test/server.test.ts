@@ -168,7 +168,7 @@ test("client prediction against the server with latency and jitter", async () =>
   try {
     const ws = new WebSocket("ws://127.0.0.1:" + srv.port + "/ws");
     let pred: Predictor | null = null, world: World | null = null, id = -1, worldOk = true, worst = 0, states = 0, moved = 0,
-        x0 = NaN, y0 = NaN;
+        x0 = NaN, y0 = NaN, acked = 0;
     ws.on("message", (d: unknown) => {
       const m = JSON.parse(String(d)) as ServerMsg;
       if (m.t === "welcome") {
@@ -189,21 +189,34 @@ test("client prediction against the server with latency and jitter", async () =>
         if ( before && !me.dead ) { worst = Math.max(worst, Math.hypot(pred.me!.x - before.x, pred.me!.y - before.y)); }
         if (Number.isNaN(x0)) { x0 = me.x; y0 = me.y; }
         moved = Math.max(moved, Math.hypot(me.x - x0, me.y - y0));
+        acked = me.ack;
         states++;
       }
     });
     await new Promise<void>(ok => ws.on("open", () => ok()));
-    ws.send(JSON.stringify({ t: "hello", name: "pred" }));
+    // The test run's flat, open level (2026-11-20): on the first room's
+    // random level, trees or water sometimes blocked the walk.
+    //
+    ws.send(JSON.stringify({ t: "create", name: "pred", room: "", open: false, difficulty: "test", levels: 2 }));
     const wait = (ms: number) => new Promise(ok => setTimeout(ok, ms));
-    await wait(300);
+    for (let t = 0; ( !pred && (t < 100) ); t++) { await wait(50); }
+    assert.ok(pred, "welcomed");
     const dirs = [[1, 0], [0, 1], [-1, 0], [0, -1], [0.7, -0.7]];
+    let last = 0;
     for (let k = 0; k < 60; k++) {
       const [mx, my] = dirs[Math.floor(k / 12) % dirs.length],
             inp = { mx, my, action: false, boost: ((k % 20) === 5), emote: -1, tool: -1, fast: false };
-      ws.send(JSON.stringify({ t: "input", seq: pred!.step(inp), ...inp }));
+      last = pred!.step(inp);
+      ws.send(JSON.stringify({ t: "input", seq: last, ...inp }));
       await wait(50);
     }
-    await wait(400);
+
+    // Until the server has applied every step (a busy machine runs its
+    // ticks late), then one more state.
+    //
+    for (let t = 0; ( (acked < last) && (t < 200) ); t++) { await wait(50); }
+    await wait(150);
+    assert.equal(acked, last, "every step applied");
     assert.ok(states > 40, states + " states");
     assert.ok(moved > 2, "walked " + moved.toFixed(2) + " cells");
     assert.ok(worst < 1e-6, "largest correction " + worst);

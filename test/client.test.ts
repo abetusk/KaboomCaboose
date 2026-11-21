@@ -154,6 +154,10 @@ test("ground tints: ground cells get several mild tints (D11.15)", () => {
     assert.ok(list.every(t => t.every(c => (Math.abs(c - 1) <= most))), k + " are mild");
   }
   const lv = generate(LEVEL), w = new World(lv.grid);
+
+  // Tints alone: the level palettes (view.palette) colour cells too.
+  //
+  V.palette = false;
   const colours = (on: boolean) => {
     V.groundTints = on; V.blackTints = on; V.ao = false; V.groundPatches = false; V.groundTintCount = 12; V.groundTintStrength = 1;
     const t = new Terrain(w, models());

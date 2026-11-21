@@ -115,6 +115,13 @@ As of 2026-11-18, on a public address:
 - the settings panel lets any player change their room's shared
   settings, and its Restart button restarts the room's run.
 
+## Automatic updates
+
+Ubuntu's nightly automatic updates restart nginx and, when libc or the
+gcc runtime changes, voxel-rail itself. A voxel-rail restart ends the
+runs in progress. See `docs/INCIDENT-2026-11-19.md` for one such loss,
+how often it can happen, and ways to avoid it.
+
 ## Not verified
 
 The Apache rules have not been run here (no Apache on the development

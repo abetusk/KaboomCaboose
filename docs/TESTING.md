@@ -119,7 +119,9 @@ The page on the headset says it is disconnected, or does not load.
   widens) and it settles; a trigger press, a pinch or a grab puts it
   down at once.
 - Squeeze (controller grip) or pinch (hand tracking) with one hand to
-  drag the level along the board; left thumbstick press drops the drag, left Y steps
+  drag the level along the board; while holding one grip, the right
+  thumbstick slides the view too (push right to see further right);
+  left thumbstick press drops the drag, left Y steps
   what the board follows (train, your character, nothing). With both
   hands, carry, turn and resize the board.
 - Left thumbstick walks (up = away from you across the board), right A
@@ -127,6 +129,16 @@ The page on the headset says it is disconnected, or does not load.
   right thumbstick picks and the right trigger sends (D3.6). With the
   menu closed, the left and right triggers step to the previous and next
   tool, as [ and ] do on the keyboard.
+- Lit dynamite: hold right A to aim, and tilt the right controller to
+  set the distance: pointing down at the board (45 degrees or more) is
+  the shortest throw, one cell; raising it toward level reaches farther,
+  up to the full range at level. The dots and ring show where it will
+  land; let go of A to throw. A quick tap still puts it down at your
+  feet. The angles are `input.throwPitch` in `config/game.json`.
+- Starting AR from the lobby, and the end of a run, put you in the
+  walk-in lobby (D7.6a): stand in a circle until its pie fills to take a
+  character, make a run (NEW) or join an open room (JOIN). Without a
+  headset, `http://localhost:8080/?lobby` opens it on the page.
 - To leave AR, open the headset's system menu with the Meta button and
   exit the page's session there (from memory, not checked on a headset).
 
@@ -161,7 +173,11 @@ The test run is a difficulty in the lobby, "test". It makes a few short
 hand-made levels: flat, no black rock, grey rock along the top edge,
 trees along the bottom, 10 cells of track to lay from one station to the
 next (a level is 24 cells long; its length field is off), and two piles
-of 10 track beside each station. Picking it sets 4 levels. A level takes
+of 10 track beside each station. The train starts with the dynamite
+wagon at its back, holding one stick (taken with empty hands beside
+it), as if its upgrade had been taken, so the dynamite upgrades can be
+offered from the first station. Two cells of track behind the first
+station hold the longer train. Picking it sets 4 levels. A level takes
 moments to lay, so stations, upgrades, wagons and dynamite can be tried
 out quickly.
 

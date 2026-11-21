@@ -617,18 +617,30 @@ function attempt(p: GenParams, rng: Rng): { grid: Grid, routes: Route[], chokesX
         count = (d: number) => Math.round((area * d) / 1000);
   // Ponds stay on one height level.
   //
+  const one   = (lo: number, hi: number, c: CellType, ok: (x: number, y: number) => boolean) => {
+    const x = rng.int(0, L - 1), y = rng.int(0, W - 1), z = g.z(x, y),
+          okz = ( (c === Cell.WATER) ? ((u: number, v: number) => ( ok(u, v) && (g.z(u, v) === z) )) : ok );
+    grow(g, rng, x, y, rng.int(lo, hi), c, okz);
+  };
   const seed  = (n: number, lo: number, hi: number, c: CellType, ok: (x: number, y: number) => boolean) => {
-    for (let k = 0; k < n; k++) {
-      const x = rng.int(0, L - 1), y = rng.int(0, W - 1), z = g.z(x, y),
-            okz = ( (c === Cell.WATER) ? ((u: number, v: number) => ( ok(u, v) && (g.z(u, v) === z) )) : ok );
-      grow(g, rng, x, y, rng.int(lo, hi), c, okz);
-    }
+    for (let k = 0; k < n; k++) { one(lo, hi, c, ok); }
   };
 
   seed(count(p.blackrockDensity), p.blackrockSize[0], p.blackrockSize[1], Cell.BLACKROCK, blocker);
   seed(count(p.pondDensity),      p.pondSize[0],      p.pondSize[1],      Cell.WATER,     blocker);
-  seed(count(p.rockDensity),      p.rockSize[0],      p.rockSize[1],      Cell.ROCK,      resource);
-  seed(count(p.forestDensity),    p.forestSize[0],    p.forestSize[1],    Cell.TREE,      resource);
+
+  // Grey rock and forest take turns (2026-11-20), the one going first
+  // swapping each round: the seeds ask for more cells than the level
+  // has, so whichever went first used to take most of the ground (grey
+  // rock, all of it first, came out at about 1.7 times the trees).
+  //
+  const nRock = count(p.rockDensity), nTree = count(p.forestDensity),
+        rock  = () => one(p.rockSize[0], p.rockSize[1], Cell.ROCK, resource),
+        tree  = () => one(p.forestSize[0], p.forestSize[1], Cell.TREE, resource);
+  for (let k = 0; k < Math.max(nRock, nTree); k++) {
+    const pair = ( ((k % 2) === 0) ? [[rock, nRock], [tree, nTree]] : [[tree, nTree], [rock, nRock]] ) as [() => void, number][];
+    for (const [f, n] of pair) { if (k < n) { f(); } }
+  }
 
   // Black rock mountains: each black rock cell rises by one level per
   // `mountainStep` cells of distance from the nearest non-black-rock cell.

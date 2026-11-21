@@ -78,6 +78,29 @@ quickly but over a few frames. A boost goes along the heading.
 from the character's feet, behind its heading: five pale balls that
 drift back, grow a little and are gone within half a second.
 
+**D2.11 Decided (2026-11-19).** Every message, countdown and player name
+in the game is drawn in blocks, in a 5-block-high voxel font (`src/client/voxfont.ts`),
+with a dark outline behind light letters, turned toward the viewer about
+the vertical. Messages are a few words a line:
+- level end, over the middle of the board: DERAILED, OUT OF TIME,
+  ARRIVED or RUN COMPLETE; PICK UPGRADE while the upgrades are open; then
+  NEXT LEVEL or LOBBY with its seconds (a run's end sends everyone to
+  the lobby, in the first room too);
+- in AR, while the board is being placed: LOOK AT TABLE;
+- over a character, from the top down: a red X while an action is
+  refused, the emote sent, a lit stick's whole seconds left, and the
+  player's name (smaller; characters the font lacks are left out). The
+  tool held is not named; it shows in the hand;
+- over a stick on the ground or in the air: its whole seconds left;
+- over the start pad: the seconds until the train leaves;
+- the emote menu: the eight emotes in an oval around the player's own
+  character, a little toward the viewer, each where the stick or keys
+  point to pick it (up first, then clockwise); the one picked larger and
+  gold.
+
+The development read-out, the lobby, the settings panel and the key list
+stay page text.
+
 **D2.6 Open.** How long the free camera waits without input before
 snapping back, and whether the snap is instant or animated.
 
@@ -145,7 +168,11 @@ device has anchors. Plane detection is not used; on a device whose hit
 test already uses detected surfaces it adds nothing. Moving: a pinch
 (hand tracking) or a squeeze (controller grip) grabs. One grab drags the
 level along the board under the hand, as a right-button drag pans on
-the page; the drag is kept as an offset from what the camera mode
+the page; while that grab is one controller's grip, the right
+thumbstick also slides the view along the level, toward the way it is
+pushed (right and away, as the viewer faces the board),
+`view.arStickPanCells` (12) cells a second at full tilt (2026-11-20);
+the drag is kept as an offset from what the camera mode
 follows until the camera-snap control (left X) drops it, and the
 camera-mode control (left Y) steps what the board follows. Two grabs
 carry the board, turn it about the vertical and resize it about the
@@ -156,7 +183,7 @@ the board stays still and the level slides under it, keeping what the
 camera mode follows in the middle, not running past the level's ends.
 Up on the thumbstick walks the way the viewer looks across the board.
 Names, emotes, the emote menu, the start label and the level-end message
-are drawn as sprites over the board (page HTML is not shown in the
+are in blocks over the board (D2.11; page HTML is not shown in the
 headset); the development read-out and the settings panel are page only.
 Bloom is off in AR. The squeeze is taken by grabbing, so it is not
 offered as an `input.xr` control.
@@ -387,6 +414,14 @@ Changed 2026-11-18:
   gold (boards, stakes, chimney bands, or the lowered cost). Walk speed
   has no wagon, so it shows its own look, as carry does.
 
+Changed 2026-11-19: a blast radius upgrade (`blast` in
+`config/upgrades.json`), offered once the dynamite wagon is won, adds
+0.5 cells to `rules.blastRadius` a time, at most twice (1.5 becomes 2,
+then 2.5). It shows as a red starburst on the dynamite wagon's roof,
+eight spikes reaching out, longer each time (glowing gold in its
+offer). The blast's fire, smoke and stone spread wider in proportion,
+and the aim's ring shows the new reach.
+
 **D6.8 Closed** (2026-11-16). No money (D6.7).
 
 **D6.9 Decided.** Starting. (Changed 2026-11-18: only a run's first
@@ -435,8 +470,15 @@ no tool can be taken out while holding one. A press lights it (beside
 the wagon, an unlit stick goes back in instead); the fuse
 (`rules.fuseSeconds`, 3 s) burns from then on. With it lit, a press let
 go within 0.25 s puts it down at the feet; held longer, it is thrown the
-way the character faces, farther the longer the hold (full range
-`rules.throwRange`, 6 cells, after `rules.throwHoldSeconds`, 1 s). While
+way the character faces. With a keyboard or gamepad, the longer the hold
+the farther (full range `rules.throwRange`, 6 cells, after
+`rules.throwHoldSeconds`, 1 s). In AR (changed 2026-11-19: the hold
+alone gave no usable control there, as aiming takes longer than the
+1 s charge), the tilt of the controller with the action button sets the
+distance instead: pointing down at `input.throwPitch[0]` (-45 degrees)
+or lower throws one cell, level (`input.throwPitch[1]`, 0 degrees) or
+higher the full range, in proportion between; the page sends the tilt
+with each input (`Input.aim`). While
 aiming, the page shows the path as dots and the blast's reach where it
 will rest. A thrown stick flies in an arc, bounces off the ground and off
 the sides of higher cells and trees, and slides to a stop
@@ -542,7 +584,8 @@ kind (wood, ore or track) with no size limit, and every item in it is
 drawn, however tall the stack grows. Taking from a stack takes
 as much as the player can carry, up to their carry limit. A player who
 carries some of a kind and walks over a stack of the same kind picks up
-from it automatically, up to the limit.
+from it automatically, up to the limit. Hands holding another kind swap
+with the stack only if they can hold all of it (2026-11-19).
 
 **D6a.15 Decided.** The action button acts on the cell the character
 faces (the direction it last moved):
@@ -633,8 +676,8 @@ the rules above left open:
 - Taking out a tool while carrying puts the stack down on the
   character's own cell, or else on a neighbouring cell at the same height
   (sides, then corners) that is free or holds the same kind. With no such
-  cell the switch is refused and a red cross shows over the character for
-  `avatar.denySeconds` (0.4 s). The cross is a placeholder for a better
+  cell the switch is refused and a red X in blocks (D2.11) shows over the
+  character for `avatar.denySeconds` (0.4 s). The cross is a placeholder for a better
   refusal animation.
 - The ? key shows and hides the list of this person's key bindings.
 - No trees or grey rock grow on the two rows north of a station, where
@@ -744,9 +787,11 @@ it does the refusal (red X) show, the load staying in hand.
 **D6a.27 Decided.** A stack (wood, ore or track) on the cell where the
 next piece of the train's line goes, holding track: with one piece in
 hand, a press lays it there, extending the line, and the stack comes
-into the hands, if the hands can hold all of it. With more pieces, or a
-stack too big to hold, a press swaps hands and stack; a pile of track
-meets track in hand as any stack does (on one's own cell they merge).
+into the hands. With more pieces, a press swaps hands and stack; a pile
+of track meets track in hand as any stack does (on one's own cell they
+merge). Both only if the hands can hold the whole stack; a stack too
+big to hold stays, and the press does nothing (2026-11-19: before, it
+swapped, and the hands held more than the carry limit).
 This holds both for the cell one stands on beside the line's end and for
 the faced cell beyond the end (D6a.24). The ghost shows the piece when
 one would be laid. On a ramp the ghost is the sloped track piece,
@@ -787,7 +832,10 @@ applied (`ack`) and the timers and press state a replay needs. The page
 resets the display copy and its character to the server's and replays
 its later steps. Where the server disagrees (a stack someone else took
 first, a push by the train or a teammate, the train's load changed by
-crafting) the server wins and the page shows its answer: a change of
+crafting) the server wins and the page shows its answer (the train's
+push is foreseen while the train stands still, since the page's copy of
+it is then the server's: track laid beside it can turn the line into
+the character; 2026-11-20): a change of
 place fades over about 0.1 s, one over 1.5 cells (a respawn) shows at
 once, and everything else switches at once. Chop and mine feedback is
 shown once per hit, however often a prediction is redone. Between steps
@@ -832,6 +880,30 @@ Each generates at the size limits (10 and 30 wide, 50 and 300 long,
 5 seeds each, at most 137 ms a level, checked 2026-11-16).
 
 A room holds one run (D6.4); the level shown is the one being played.
+
+Changed 2026-11-20: the lobby also has a character choice (knight,
+zombie, robot; D11a.2), kept in the browser and sent with joining
+(`character` in Hello and CreateMsg). Without one the server deals them
+out in turn. The character holds for every room joined after.
+
+**D7.6a Decided (2026-11-20).** The walk-in lobby, for AR players (page
+HTML is not shown in the headset): a room like any other, shared by
+everyone in it, on a small flat yard (`src/gen/lobby.ts`, 26 by 12
+cells, two stations with a train standing at one) where no run starts
+(`Game.lobby`). Circles on the ground act once a player has stood in one
+for `station.dwellSeconds`, as the start pad does: a character circle
+(the character stands on it) takes that character; a NEW circle per
+difficulty makes a listed run of it (the server's 12 levels; the test
+run 4) and joins it; a JOIN circle per open room (up to 5, with its
+name) joins it. Words are in blocks (D2.11), the player's own character
+gold. The yard is made afresh when the last player leaves.
+
+When it is used: starting AR from the HTML lobby goes into it; a run's
+end with AR on comes back to it; ending AR there goes to the HTML
+lobby. Page players keep the HTML lobby; `?lobby` in the address opens
+the walk-in lobby on the page too (for trying it without a headset).
+The server keeps it apart from the rooms (`server/lobby.ts`): never
+listed, never closed.
 
 **D7.7 Decided.** Made-up network delay for testing. `--latency MS`
 on the server holds every message, both ways, for that many
@@ -922,7 +994,11 @@ light on resources, another is wider but needs more resources.
 2. Place black rock walls across the strip at the choke points, with a
    narrow gap where a forced path crosses.
 3. Seed and grow forests, rock, black rock and ponds around random points,
-   leaving forced cells alone.
+   leaving forced cells alone. Black rock and ponds first; then grey rock
+   and forest take turns, which goes first swapping each round (changed
+   2026-11-20: the seeds ask for more cells than a level has, and grey
+   rock, all seeded before any forest, came out at about 1.7 times the
+   trees; now trees lead a little, as their larger patches intend).
 4. Validate: cheapest path by Dijkstra (land 1, water 1 plus bridge trees,
    black rock impassable), reachable resource counts by flood fill, the
    resource inequality, choke point widths. Reject and retry on failure.
@@ -1237,6 +1313,60 @@ chips, and a few leaves (the models' greens) that drift down slowly,
 slowed by drag; felling the last tree of a cell throws a burst two and a
 half times bigger.
 
+**D11.19 Experiment (2026-11-20), off by default.** Level palettes:
+`view.palette` (a page setting, so each viewer turns it on for
+themselves in the settings panel or `config/game.json`) gives each level
+of a run one of the 500 five-colour palettes of nice-color-palettes
+(MIT, `assets/third_party/nice-color-palettes/`;
+`src/client/palette.ts`). The colours go by lightness, darkest first, to
+black rock, trees (models and forest tops), water, ground (and forest
+sides), and grey rock. Each surface is multiplied so its usual average
+colour becomes the palette's, keeping its texture and shading;
+`view.paletteStrength` scales that from 0 (usual colours) to 1.
+`view.paletteSeed` picks which palettes. Between two levels, over
+`view.paletteBlendCells` (10) cells around the middle of the station
+they share, each cell takes the next level's palette with a chance
+rising smoothly along x, so they mix square by square. Not recoloured:
+grass, decor, ramps, bridges, track, stations, the train and items.
+Switching it off restores the usual look; removing it means taking out
+`palette.ts`, its calls in `terrain.ts` and the four `view.palette*`
+settings.
+
+**D11.20 Decided (2026-11-20).** Weather (`view.weather`, on). Each level
+of a run is clear, rainy or snowy: `view.rainChance` (0.3) and
+`view.snowChance` (0.15), drawn with the room's seed so everyone in the
+room sees the same (`src/client/climate.ts`). Across the station between
+two levels the weather mixes over `view.weatherBlendCells` (8) as the
+level palettes do. Over the visible window only (`src/client/weather.ts`):
+- rain: `view.rainDrops` (700) drops, each a staircase of
+  `view.rainStreak` (3) cubes, `view.rainVoxels` (2) terrain voxels
+  (a 32nd of a cell) on a side, `view.arRainVoxels` (1) in AR, every
+  cube snapped to the grid of its size; falling `view.rainSlant` (0.5)
+  voxels sideways per voxel down, `view.rainSpeed` (9) cells a second
+  (changed 2026-11-20); a share
+  `view.rainSplash` (0.35) leaves a small ring where it lands; a share
+  `view.puddles` (0.06) of plain ground cells in rainy levels holds a
+  faint, shiny puddle, hidden while track or a stack is on its cell;
+- snow: `view.snowFlakes` (450) small flakes drifting down, none
+  settling.
+Each drop or flake takes the weather of where it starts falling. Page
+settings like the other `view` ones; the chances must match between
+players for them to see the same weather (they do while everyone uses
+the served `config/game.json`).
+
+**D11.21 Decided (2026-11-20).** Birds (`view.birds`, on;
+`src/client/birds.ts`): `view.birdFlocks` (2) flocks of
+`view.birdsPerFlock` (7), each bird a dark body and two beating wings.
+A flock comes in high from beyond one side of the window and either
+crosses and leaves or, mostly, circles a while (gliding now and then);
+a circling flock then often lands, each bird on its own spot on a tree,
+grey rock or the ground near one cell away from characters and the
+train, where it bobs and turns. It takes off after 8 to 22 s, or at once
+when a block near it is hit or broken, a stick goes off, the train
+crashes or starts, or a character or the train comes within 1.3 cells
+of a bird; then it leaves, and comes back after a pause. Page side only:
+each viewer sees their own birds.
+
 ## 11a. Characters
 
 **D11a.1 Decided.** Player characters are not human. A character fills
@@ -1265,6 +1395,42 @@ downward side of the head.
 **D11a.4 Open.** How players are told apart (several players may pick the
 same character), and which character the AI teammate uses. To be
 worked out later.
+
+## 11b. Sound
+
+**D11b.1 Decided (2026-11-20).** Sound effects, from the owner's sound
+library (`assets/third_party/soundlib/`, source and licence not
+recorded; see the README there). Each plays from a point in the level
+and is louder the nearer it is to this player's character: half as loud
+at `view.soundHalfCells` (5), a quarter at about twice that, and leaning
+to the left or right ear by where it is across the view
+(`src/client/sound.ts`, Web Audio). `view.sound` and `view.soundVolume`
+switch them off and set the loudness. The browser plays nothing until
+the page has been clicked, a key pressed or AR started.
+
+| When | Sound | From |
+|---|---|---|
+| The train leaves | `train_horn` | the train's front |
+| While the train runs | `chug_loop`, looped, faster on fast-forward | the train's front |
+| The track ahead ends within `view.hornWarnCells` (8) cells and does not reach the end station | `train_horn`, every 2 s at that distance down to every 0.35 s at the end | the train's front |
+| A character boosts into the train (walking into it, or the train pushing them, makes none) | `train_horn`, at most once in 1.5 s per character | the character |
+| A bridge or a stair is built | `rub` | the cell built |
+| The train crashes; a stick goes off | `explosion` | the train's front; the stick |
+| A character mines grey rock | one of `mine0` to `mine3` at random each time the pickaxe strikes in the swing animation (changed 2026-11-20), faded out over 0.3 s when they stop | the character |
+| A character chops a tree | `wood0` to `wood5` the same way | the character |
+
+The server reports the leaving, crash, blast, bump (`bump:id`) and
+building (`built:cell`) as events; mining and chopping follow each
+character's hitting state. Characters swing at `view.swingsPerSecond`
+(2; the model's own speed is 2.4), the animation sped up or slowed to
+match; the strike is 0.56 of the way through the swing. How fast blocks
+break stays `rules.hitSeconds` (0.5 s, so 2 swings a second is one per
+hit).
+
+What plays for each of these is `config/sounds.json`: the folder, and per
+cue (trainStart, trainRunning, endWarning, bump, built, crash, blast,
+mine, chop) its files, one picked at random each time, and its own
+volume (the chug is 0.6). The page checks it on load.
 
 ## 12. Repository
 
@@ -1319,4 +1485,4 @@ GLTF loader.
 
 Not in yet: station upgrades and money (D6.7, D6.8),
 silhouettes and the peephole (D5), the free camera (D2.4), the
-silhouette on off-screen markers (D2.5), the AI teammate (D8), sound.
+silhouette on off-screen markers (D2.5), the AI teammate (D8).

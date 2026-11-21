@@ -12,7 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Cell, Grid, DIRS } from "../src/level/cells.ts";
 import { World, Item } from "../src/sim/world.ts";
-import { Game, NO_INPUT, Tool, TOOL_NEXT, TOOL_PREV, LEAVE_RADIUS, WHEELBASE, CAR_BODY, trainBody, type Input, type Settings, type Player } from "../src/sim/game.ts";
+import { Game, NO_INPUT, Tool, TOOL_NEXT, TOOL_PREV, LEAVE_RADIUS, WHEELBASE, CAR_BODY, BUMP_SECONDS, trainBody, type Input, type Settings, type Player } from "../src/sim/game.ts";
 import { poseAt, carPose } from "../src/sim/path.ts";
 import { CONFIG } from "../src/config.ts";
 import { generate, DEFAULTS } from "../src/gen/generate.ts";
@@ -277,6 +277,15 @@ test("stacks: take up to the carry limit, walk-over pickup, one kind per cell (D
   place(g, p, 10, 0, 0);
   g.press(p);
   assert.deepEqual([p.carry, p.count, w.stack[c], w.count[c]], [Item.ORE, 2, Item.WOOD, 5]);
+
+  // A stack of another kind too big to hold stays where it is
+  // (2026-11-19).
+  //
+  const d = w.idx(11, 0);
+  w.stack[d] = Item.WOOD; w.count[d] = 20;
+  place(g, p, 11, 0, 0);
+  g.press(p);
+  assert.deepEqual([p.carry, p.count, w.stack[d], w.count[d]], [Item.ORE, 2, Item.WOOD, 20]);
 });
 
 test("the train derails at the end of its track (D6a.2)", () => {
@@ -434,14 +443,18 @@ test("a stack where the next piece goes: one piece is laid and the stack taken; 
   g.press(p);
   assert.deepEqual([w.track[u], p.carry, p.count, w.stack[u]], [1, Item.TRACK, 2, Item.NONE]);
 
-  // A stack too big to hold whole is swapped instead.
+  // A stack too big to hold whole stays, with one piece or several in
+  // hand (2026-11-19: it used to swap, past the carry limit).
   //
   const v = w.idx(11, 2);
   w.stack[v] = Item.WOOD; w.count[v] = 9;
-  place(g, p, 10, 2, 1);
-  p.carry = Item.TRACK; p.count = 1;
-  g.press(p);
-  assert.deepEqual([w.track[v], p.carry, p.count, w.stack[v], w.count[v]], [0, Item.WOOD, 9, Item.TRACK, 1]);
+  for (const n of [1, 3]) {
+    place(g, p, 10, 2, 1);
+    p.carry = Item.TRACK; p.count = n;
+    assert.equal(g.plan(p.x, p.y, p.facing, p.carry, p.count), null, "no ghost with " + n + " in hand");
+    g.press(p);
+    assert.deepEqual([w.track[v], p.carry, p.count, w.stack[v], w.count[v]], [0, Item.TRACK, n, Item.WOOD, 9], n + " in hand");
+  }
 });
 
 test("fast-forward: held by a player, or once the line reaches the end station (D6a.28)", () => {
@@ -670,6 +683,7 @@ test("bridges from a ledge and ramps against a face one level up (D4.7, D4.8)", 
   g.press(p);
   assert.equal(w.bridge[w.idx(3, 0)], 1);
   assert.deepEqual([p.carry, p.count], [Item.WOOD, 1]);
+  assert.ok(g.events.includes("built:" + w.idx(3, 0)), "a built event (for its sound)");
   assert.ok(w.walkable(w.idx(3, 0)));
 
   place(g, p, 2, 1, 1);
@@ -678,6 +692,25 @@ test("bridges from a ledge and ramps against a face one level up (D4.7, D4.8)", 
   assert.equal(w.type(w.idx(3, 1)), Cell.RAMP_GROUND);
   assert.equal(w.g.dir[w.idx(3, 1)], 1);
   assert.ok(w.joins(w.idx(3, 1), w.idx(4, 1)), "the ramp climbs to the higher cell");
+  assert.ok(g.events.includes("built:" + w.idx(3, 1)));
+});
+
+test("only boosting into the train makes a bump event, at most one per BUMP_SECONDS", () => {
+  const g = game(world(FLAT), settings({}, { startDelay: 1000 })), p = g.addPlayer(1, "a", "knight");
+  g.shapeTrain();
+  const t = g.trainPts[0], gap = g.s.train.collideRadius + g.s.avatar.radius + 0.02,
+        bumps = () => g.events.filter(e => e.startsWith("bump:")),
+        into  = (boostT: number) => { p.x = t.x; p.y = t.y + gap; p.boostT = boostT; g.events = []; g.move(p, 0, -0.1); };
+  into(0);
+  assert.deepEqual(bumps(), [], "walking into it");
+  p.x = t.x; p.y = t.y + 0.1; p.boostT = 0;
+  g.events = [];
+  g.tick(new Map());
+  assert.deepEqual(bumps(), [], "the train pushing");
+  into(0.2);
+  assert.deepEqual(bumps(), ["bump:1"], "boosting into it");
+  into(0.2);
+  assert.deepEqual(bumps(), [], "not again so soon");
 });
 
 test("the train blocks a character above it: no boosting off a ledge into it or across it (D6a.16)", () => {

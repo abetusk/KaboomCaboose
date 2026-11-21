@@ -20,6 +20,9 @@
 //                 round the handle more each (chopping and mining faster)
 //   cheapDynamite the cost on the dynamite wagon's sides drops, its
 //                 digits turn gold
+//   blast         a red starburst on the dynamite wagon's roof, eight
+//                 spikes reaching out, longer each (a wider blast,
+//                 2026-11-19)
 //
 // The dynamite wagon always shows what a stick costs on both sides, in
 // block digits: a wood block and its number, an ore block and its
@@ -32,6 +35,7 @@
 //
 
 import * as THREE from "three";
+import { GLYPHS } from "./voxfont.ts";
 import { handTool } from "./handtools.ts";
 
 const mat = (c: number) => new THREE.MeshLambertMaterial({ color: c });
@@ -39,7 +43,8 @@ const PACK   = mat(0x9a6a3a), STRAP = mat(0x5a3a1e),
       FEATHER = mat(0xf4f0e6), GOLD = mat(0xf0c040),
       BOARD  = mat(0xd0a060), STEEL = mat(0x7d8a96),
       SOOT   = mat(0x3a3330), PLATE = mat(0x2a1a14),
-      WOOD   = mat(0x8a5a2b), ORE = mat(0xa8b0ba), CREAM = mat(0xf4ecd8);
+      WOOD   = mat(0x8a5a2b), ORE = mat(0xa8b0ba), CREAM = mat(0xf4ecd8),
+      FLAME  = mat(0xd83a20), SPARK = mat(0xf8c030);
 
 // The parts an offered upgrade adds glow gold in the offer's picture; the
 // page pulses this material's glow.
@@ -180,26 +185,15 @@ export function toolGear(tool: THREE.Object3D, n: number, glowLast = false): voi
 
 // ---- block text ----
 
-// 3 by 5 block digits and letters, rows top to bottom.
-//
-const FONT: Record<string, string[]> = {
-  "S": ["###", "#..", "###", "..#", "###"], "T": ["###", ".#.", ".#.", ".#.", ".#."],
-  "A": ["###", "#.#", "###", "#.#", "#.#"], "R": ["##.", "#.#", "##.", "#.#", "#.#"],
-  "0": ["###", "#.#", "#.#", "#.#", "###"], "1": [".#.", "##.", ".#.", ".#.", "###"],
-  "2": ["###", "..#", "###", "#..", "###"], "3": ["###", "..#", ".##", "..#", "###"],
-  "4": ["#.#", "#.#", "###", "..#", "..#"], "5": ["###", "#..", "###", "..#", "###"],
-  "6": ["###", "#..", "###", "#.#", "###"], "7": ["###", "..#", ".#.", ".#.", ".#."],
-  "8": ["###", "#.#", "###", "#.#", "###"], "9": ["###", "#.#", "###", "..#", "###"],
-};
-
-// Text in block characters on the x-y plane, facing +z, its middle at
-// the origin; blocks of side `px`, `depth` blocks deep. Returns the group
+// Text in block characters (src/client/voxfont.ts, 3 wide glyphs only:
+// digits and START) on the x-y plane, facing +z, its middle at the
+// origin; blocks of side `px`, `depth` blocks deep. Returns the group
 // and its width.
 //
 export function blockText(text: string, px: number, m: THREE.Material, depth = 0.6): [THREE.Group, number] {
   const g = new THREE.Group(), w = (text.length * 4) - 1;
   [...text].forEach((ch, k) => {
-    const rows = FONT[ch] ?? FONT["0"];
+    const rows = GLYPHS[ch] ?? GLYPHS["0"];
     rows.forEach((row, r) => {
       [...row].forEach((c, j) => {
         if (c === "#") { box(g, px, px, px * depth, m, (((k * 4) + j) - ((w - 1) / 2)) * px, (2 - r) * px, 0); }
@@ -270,6 +264,19 @@ export function carGear(kind: string, d: CarDims, taken: Record<string, number>,
       p.position.set(0, H * 0.5, s * ((W / 2) + 0.012));
       if (s < 0) { p.rotation.y = Math.PI; }
       g.add(p);
+    }
+    const n = taken.blast ?? 0;
+    if (n > 0) {
+      const burst = new THREE.Group(), reach = 0.1 + (n * 0.09), sp = m("blast", FLAME);
+      box(burst, 0.09, 0.09, 0.09, m("blast", SPARK), 0, 0, 0);
+      for (let k = 0; k < 8; k++) {
+        const arm = new THREE.Group(), long = ( (k % 2) ? 0.7 : 1 ) * reach;
+        box(arm, long, 0.045, 0.045, sp, 0.04 + (long / 2), 0, 0);
+        arm.rotation.y = (k * Math.PI) / 4;
+        burst.add(arm);
+      }
+      burst.position.set(0.25 * L, H + 0.06, 0);
+      g.add(burst);
     }
   }
   return ( g.children.length ? g : null );

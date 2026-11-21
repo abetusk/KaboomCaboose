@@ -29,6 +29,11 @@ const MAX_FIRE  = 90,
       MAX_JUNK  = 16,
       MAX_TRAIL = 400;
 
+// The blast radius (cells) the burst's spread was made for; a burst for
+// a bigger radius is scaled by radius / BURST_RADIUS.
+//
+export const BURST_RADIUS = 1.5;
+
 // Grid that places and sizes snap to, in cells.
 //
 const VOX = 1 / 16;
@@ -123,18 +128,21 @@ export class Blast {
   get active(): boolean { return ( (this.flames.length + this.puffs.length + this.bits.length + this.trails.length) > 0 ); }
 
   // An explosion centred at (x, y, z), three.js axes, on ground y.
+  // `s` scales how wide it spreads and how big its fire and smoke grow
+  // (1 for a blast of radius BURST_RADIUS; a bigger blast radius from an
+  // upgrade gives a bigger burst).
   //
-  burst(x: number, y: number, z: number): void {
-    const rnd = (a: number) => ( (Math.random() - 0.5) * a );
+  burst(x: number, y: number, z: number, s = 1): void {
+    const rnd = (a: number) => ( (Math.random() - 0.5) * a * s ), sz = Math.sqrt(s);
     for (let k = 0; k < 60; k++) {
       if (this.flames.length >= MAX_FIRE) { this.flames.shift(); }
-      const a = Math.random() * Math.PI * 2, out = 0.4 + (Math.random() * 1.6);
+      const a = Math.random() * Math.PI * 2, out = (0.4 + (Math.random() * 1.6)) * s;
       this.flames.push({
         p    : new THREE.Vector3(x + rnd(0.6), y + 0.2 + (Math.random() * 0.4), z + rnd(0.6)),
         v    : new THREE.Vector3(Math.cos(a) * out, 0.8 + (Math.random() * 1.8), Math.sin(a) * out),
         age  : -Math.random() * 0.15,
         life : 0.6 + (Math.random() * 0.6),
-        size : 0.1 + (Math.random() * 0.1),
+        size : (0.1 + (Math.random() * 0.1)) * sz,
         grow : 1.5 + Math.random(),
       });
     }
@@ -145,7 +153,7 @@ export class Blast {
         v    : new THREE.Vector3(rnd(0.5), 0.35 + (Math.random() * 0.4), rnd(0.5)),
         age  : -(0.2 + (Math.random() * 0.5)),
         life : 1.6 + (Math.random() * 1.2),
-        size : 0.15 + (Math.random() * 0.1),
+        size : (0.15 + (Math.random() * 0.1)) * sz,
         grow : 2 + Math.random(),
       });
     }
@@ -154,7 +162,7 @@ export class Blast {
     //
     for (let k = 0; k < 12; k++) {
       if (this.bits.length >= MAX_JUNK) { this.bits.shift(); }
-      const a = ((k / 12) * Math.PI * 2) + rnd(0.4), out = 1.6 + (Math.random() * 2.0);
+      const a = ((k / 12) * Math.PI * 2) + rnd(0.4), out = (1.6 + (Math.random() * 2.0)) * s;
       this.bits.push({
         p     : new THREE.Vector3(x + rnd(0.3), y + 0.4, z + rnd(0.3)),
         v     : new THREE.Vector3(Math.cos(a) * out, 3.0 + (Math.random() * 2.5), Math.sin(a) * out),

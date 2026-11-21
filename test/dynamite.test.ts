@@ -14,9 +14,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { World, Item } from "../src/sim/world.ts";
 import { Cell, Grid } from "../src/level/cells.ts";
-import { Game, NO_INPUT, Tool, TAP, type Settings, type Player, type Input } from "../src/sim/game.ts";
+import { Game, NO_INPUT, Tool, TAP, throwPower, type Settings, type Player, type Input } from "../src/sim/game.ts";
 import { launch, stepBomb, flight, floorAt } from "../src/sim/dynamite.ts";
 import { CONFIG } from "../src/config.ts";
+import { upgrade } from "../src/upgrades.ts";
 
 // Map rows: . ground, S station, T forest, R grey rock, B black rock.
 // Heights: optional rows of digits.
@@ -178,4 +179,59 @@ test("a long press throws the stick the way the character faces; a death drops a
   g.kill(a);
   assert.equal(a.carry, Item.NONE);
   assert.ok(g.bombs.some(q => ( (Math.abs(q.x - 4.5) < 1e-9) && (q.fuse === 2) )));
+});
+
+test("an aim control sets the throw's distance; without one the hold does (2026-11-19)", () => {
+  const r = { throwHoldSeconds: 1 };
+  assert.equal(throwPower(0.1, 0.8, r), 0, "a tap puts it down whatever the aim");
+  assert.equal(throwPower(0.5, undefined, r), 0.5, "no aim: the hold");
+  assert.equal(throwPower(0.5, -1, r), 0.5, "aim below 0: the hold");
+  assert.equal(throwPower(5, 0.3, r), 0.3, "the aim, however long the hold");
+  assert.ok( (throwPower(0.3, 0, r) > 0), "the lowest aim still throws" );
+
+  // Through the game: an aim equal to what a half-second hold gives,
+  // held well past the charge time, ends where that hold's throw does;
+  // an aim of 0 ends nearer.
+  //
+  const throwFor = (holdS: number, aim: number | undefined) => {
+    const w = world(MAP), s = settings(), g = new Game(w, s), a = g.addPlayer(1, "ann", "knight");
+    const press = (on: boolean) => new Map([[1, { ...NO_INPUT, action: on, aim }]]);
+    at(a, 2.5, 6.5, 0);
+    a.carry = Item.DYNAMITE; a.count = 1;
+    g.tick(press(true));
+    g.tick(press(false));
+    g.tick(press(true));
+    run(g, holdS, press(true));
+    const held = a.aimT;
+    g.tick(press(false));
+    assert.equal(g.bombs.length, 1);
+    run(g, 2);
+    return { end: g.bombs[0].x - 2.5, held };
+  };
+  const hold = throwFor(0.5, undefined), power = throwPower(hold.held, undefined, CONFIG.rules),
+        aimHalf = throwFor(2.5, power).end, aimLow = throwFor(2.5, 0).end;
+  assert.ok( (power > 0.3) && (power < 0.7), "a half-second hold, power " + power );
+  assert.ok( (Math.abs(aimHalf - hold.end) < 1e-6), "aim " + power + " ends at " + aimHalf.toFixed(2) + ", the hold at " + hold.end.toFixed(2) );
+  assert.ok( (aimLow > 0.5) && (aimLow < aimHalf), "aim 0 ends nearer, at " + aimLow.toFixed(2) );
+});
+
+test("the blast radius upgrade widens what a blast clears (2026-11-19)", () => {
+  const u = upgrade("blast");
+  assert.ok(u, "in config/upgrades.json");
+  assert.deepEqual([u!.needs, u!.changes.map(([sec, key]) => sec + "." + key)], ["dynamiteWagon", ["rules.blastRadius"]]);
+  const step = u!.changes[0][2];
+
+  // A tree just past the plain radius from the blast: left standing
+  // before the upgrade, cleared after it.
+  //
+  const clears = (taken: number) => {
+    const w = world(MAP), s = settings(), g = new Game(w, s);
+    for (let k = 0; k < taken; k++) { g.take("blast"); }
+    assert.equal(s.rules.blastRadius, CONFIG.rules.blastRadius + (taken * step));
+    const far = w.idx(10, 2), d = CONFIG.rules.blastRadius + (step / 2);
+    g.blast(10.5, 2.5 + d, 0);
+    return (w.type(far) !== Cell.TREE);
+  };
+  assert.equal(clears(0), false, "out of reach before");
+  assert.equal(clears(1), true, "in reach after one");
 });

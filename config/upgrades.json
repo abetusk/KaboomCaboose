@@ -13,6 +13,8 @@
     "craftingWagon": { "label": "Crafting wagon", "max": 2, "wagon": "crafting" },
     "dynamiteWagon": { "label": "Dynamite wagon", "max": 1, "wagon": "dynamite" },
     "cheapDynamite": { "label": "Wood and ore a stick", "max": 2, "needs": "dynamiteWagon",
-                       "changes": { "rules.dynamiteWood": -1, "rules.dynamiteOre": -1 } }
+                       "changes": { "rules.dynamiteWood": -1, "rules.dynamiteOre": -1 } },
+    "blast":   { "label": "Blast radius", "unit": " cells", "max": 2, "needs": "dynamiteWagon",
+                 "changes": { "rules.blastRadius": 0.5 } }
   }
 }

@@ -120,6 +120,26 @@ export interface State {
   // it runs.
   //
   next    : number;
+
+  // In the walk-in lobby only: its circles.
+  //
+  lobby?  : LobbyPad[];
+}
+
+// A circle in the walk-in lobby (2026-11-20): standing in it for
+// station.dwellSeconds acts. `kind` "character" takes that character
+// (value: its name), "create" makes a listed run of that difficulty and
+// joins it, "join" joins that room (value: its code). `label`: the lines
+// shown over it. `progress`: seconds stood in it by whoever has stood
+// longest.
+//
+export interface LobbyPad {
+  x        : number;
+  y        : number;
+  kind     : "character" | "create" | "join";
+  value    : string;
+  label    : string[];
+  progress : number;
 }
 
 // A room as listed: its code, name, whether anyone may see it in the
@@ -137,6 +157,11 @@ export interface RoomInfo {
   width      : number;
   length     : number;
   difficulty : string;
+
+  // The walk-in lobby (server/lobby.ts), not a run: no train leaves, and
+  // circles on the ground pick a character, make a run or join one.
+  //
+  lobby?     : boolean;
 }
 
 // Options for a new room, as limits [min, max] and starting values. A
@@ -193,9 +218,19 @@ export interface OverMsg {
 // answers with Welcome, or ErrorMsg for an unknown code.
 //
 export interface Hello {
-  t     : "hello";
-  name  : string;
-  room? : string;
+  t          : "hello";
+  name       : string;
+  room?      : string;
+  character? : string;
+}
+
+// Go into the walk-in lobby (server/lobby.ts; answered with Welcome),
+// as AR players do: page HTML is not shown in the headset.
+//
+export interface LobbyMsg {
+  t          : "lobby";
+  name       : string;
+  character? : string;
 }
 
 // Make a room and join it (answered with Welcome); open rooms are listed.
@@ -211,6 +246,7 @@ export interface CreateMsg {
   width?      : number;
   length?     : number;
   difficulty? : string;
+  character?  : string;
 }
 
 export interface ListMsg {
@@ -259,6 +295,12 @@ export interface RestartMsg {
 export const SHARED_SECTIONS = ["rules", "train", "avatar", "station", "levelgen"];
 
 export type ServerMsg = Welcome | State | ConfigMsg | RoomsMsg | ErrorMsg | OverMsg | DevSaid;
-export type ClientMsg = Hello | InputMsg | SetMsg | RestartMsg | CreateMsg | ListMsg | LeaveMsg | DevMsg;
+export type ClientMsg = Hello | InputMsg | SetMsg | RestartMsg | CreateMsg | ListMsg | LeaveMsg | DevMsg | LobbyMsg;
+
+// The characters a player can be (D11a.2); `character` in Hello,
+// CreateMsg and LobbyMsg picks one, otherwise the server deals them out
+// in turn.
+//
+export const CHARACTERS = ["knight", "zombie", "robot"];
 
 export const EMOTES = ["Here!", "Wood!", "Ore!", "Track!", "Help!", "Yes", "No", "Hurry!"];

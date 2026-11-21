@@ -20,6 +20,7 @@ import { CONFIG } from "../config.ts";
 import { Atlas, BoxBuilder, voxGeometry, type Vox } from "./voxel.ts";
 import { tileSheet, type TileSheet, type Mat } from "./tiles.ts";
 import { BRICK_PALETTE, BRICK_CRACK, BLOCK_XY, BLOCK_Z, brickBlock, type CarveOpts } from "../assets/bricks.ts";
+import { levelColours, levelAt, type Kind, type LevelColours } from "./palette.ts";
 
 export { LEVEL_Y };
 export const topY = (h: number) => ((h + 1) * LEVEL_Y);
@@ -112,6 +113,7 @@ export const TERRAIN_VIEW_KEYS = new Set([
   "brickRock", "brickRelief", "groundTints", "groundTintCount", "groundTintStrength",
   "treeTints", "treeTintCount", "treeTintStrength", "blackTints", "blackTintCount", "blackTintStrength",
   "rockTints", "rockTintCount", "rockTintStrength", "rockPatterns", "rockPatternScale",
+  "palette", "paletteSeed", "paletteStrength", "paletteBlendCells",
 ]);
 
 // Ground tints (D11.15): colour multipliers sprinkled at random over
@@ -494,11 +496,37 @@ export class Terrain {
     return g;
   }
 
-  // Grey rock cell i's tint (view.rockTints), or null.
+  // Level palettes (view.palette, src/client/palette.ts): the colour
+  // multipliers per level, remade when the settings change, and the x of
+  // the middles of the stations between levels.
+  //
+  private palKey  = "";
+  private palCols : LevelColours[] = [];
+  private palMids : number[] = [];
+
+  // Cell i's palette multiplier for `kind` ("model" for the tree models),
+  // or null with view.palette off.
+  //
+  pal(i: number, kind: Kind | "model"): [number, number, number] | null {
+    const V = CONFIG.view;
+    if (!V.palette) { return null; }
+    const key = V.paletteSeed + ":" + V.paletteStrength;
+    if (key !== this.palKey) {
+      const st = this.w.stations;
+      this.palKey  = key;
+      this.palCols = levelColours(st.length - 1, V.paletteSeed, V.paletteStrength);
+      this.palMids = st.slice(1, -1).map(c => ( (c[0][0] + c[c.length - 1][0] + 1) / 2 )).sort((a, b) => (a - b));
+    }
+    const [x] = this.w.xy(i), c = this.palCols[Math.min(this.palCols.length - 1, levelAt(x, this.palMids, V.paletteBlendCells, i))];
+    return ( (kind === "model") ? c.tree : c.kinds[kind] );
+  }
+
+  // Grey rock cell i's tint (view.rockTints, and view.palette), or null.
   //
   rockTint(i: number): [number, number, number] | null {
-    const V = CONFIG.view;
-    return ( V.rockTints ? pickTint(ROCK_TINTS, V.rockTintCount, V.rockTintStrength, i + 277) : null );
+    const V = CONFIG.view, t = ( V.rockTints ? pickTint(ROCK_TINTS, V.rockTintCount, V.rockTintStrength, i + 277) : null ),
+          p = this.pal(i, "rock");
+    return ( p ? ( t ? [t[0] * p[0], t[1] * p[1], t[2] * p[2]] : p ) : t );
   }
 
   // Tree cell i's tint (view.treeTints), as its first tree gets it, or
@@ -623,6 +651,12 @@ export class Terrain {
     //
     const V = CONFIG.view;
     let turn = 0, tint: [number, number, number] = [1, 1, 1], patchy = false, cell = 0;
+
+    // Tops drawn in another colour than the column's sides (a forest's
+    // top in the level palette's tree colour, over dirt sides); null: as
+    // the sides.
+    //
+    let topTint: [number, number, number] | null = null;
     const solidTop = (j: number) => ( this.colTop(j) + ( (w.type(j) === Cell.ROCK) ? 0.5 : 0 ) );
     const occ = (x: number, y: number, y1: number) => ( ( w.inside(x, y) && (solidTop(w.idx(x, y)) > (y1 + 0.01)) ) ? 1 : 0 );
     const nearF = (vx: number, vz: number) => {
@@ -633,7 +667,7 @@ export class Terrain {
       return ( n ? (f / n) : 0 );
     };
     const corner = (vx: number, vz: number, y1: number): number[] => {
-      let col = tint as number[];
+      let col = (topTint ?? tint) as number[];
       if ( patchy && V.groundPatches ) {
         const st = V.groundPatchStrength, S = Math.max(1, V.groundPatchScale),
               a = noise2(vx, vz, S, 7) - 0.5, bw = noise2(vx, vz, S * 0.6, 31) - 0.5, f = nearF(vx, vz) * 2;
@@ -708,6 +742,19 @@ export class Terrain {
         const ctint = ( (V.groundTints && (ct === Cell.GROUND)) ? pickTint(GROUND_TINTS, V.groundTintCount, V.groundTintStrength, i + 77) :
                       ( (V.blackTints && (ct === Cell.BLACKROCK)) ? pickTint(BLACK_TINTS, V.blackTintCount, V.blackTintStrength, i + 177) : null ) );
         if (ctint) { tint = [tint[0] * ctint[0], tint[1] * ctint[1], tint[2] * ctint[2]]; }
+
+        // The level palette (view.palette): the column takes its cell's
+        // colour; grey rock's own block takes the rock colour below,
+        // over the tint without this.
+        //
+        // A forest's dirt sides take the ground colour, its top the tree
+        // colour.
+        //
+        const plain = tint,
+              pc    = this.pal(i, ( (ct === Cell.BLACKROCK) ? "black" : ( (ct === Cell.WATER) ? "water" : "ground" ) )),
+              pt    = ( (ct === Cell.TREE) ? this.pal(i, "trees") : null );
+        topTint = ( pt ? [tint[0] * pt[0], tint[1] * pt[1], tint[2] * pt[2]] : null );
+        if (pc) { tint = [tint[0] * pc[0], tint[1] * pc[1], tint[2] * pc[2]]; }
         patchy = ( (ct === Cell.GROUND) || (ct === Cell.TREE) || (ct === Cell.ROCK) || (ct === Cell.STATION) );
         const cover = (d: number) => {
           const j = w.step(i, d);
@@ -747,6 +794,8 @@ export class Terrain {
             return ( ( (w.type(j) === Cell.ROCK) && (this.colH(j) === h) ) ? (topY(h) + 0.5) : this.colTop(j) );
           };
           const rt = this.rockTint(i);
+          tint    = plain;
+          topTint = null;
           if (rt) { tint = [tint[0] * rt[0], tint[1] * rt[1], tint[2] * rt[2]]; }
           if (des) { dk = ("rock" + st) as Mat; dupper = true; b = db; }
           box(rv[st] ?? rv[0], x, y, topY(h), topY(h) + 0.5, true, rcover);
@@ -825,10 +874,11 @@ export class Terrain {
       const [x, y] = w.xy(i), c = w.type(i), h = w.z(i), cx = x + 0.5, cz = y + 0.5;
       // Tree tints (view.treeTints): one per tree.
       //
+      const tp = this.pal(i, "model");
       const treeTint = (k: number): THREE.Color | null => {
-        if (!V.treeTints) { return null; }
-        const t = pickTint(TREE_TINTS, V.treeTintCount, V.treeTintStrength, (i * 16) + k + 333);
-        return new THREE.Color(t[0], t[1], t[2]);
+        const t = ( V.treeTints ? pickTint(TREE_TINTS, V.treeTintCount, V.treeTintStrength, (i * 16) + k + 333) : null );
+        if (!t && !tp) { return null; }
+        return new THREE.Color(...(t ?? [1, 1, 1])).multiply(new THREE.Color(...(tp ?? [1, 1, 1])));
       };
       if ( (c === Cell.TREE) && !V.treeVariety ) {
         const keep = Math.max(0, 9 - (3 * w.hits[i]));
@@ -940,8 +990,10 @@ export class Terrain {
       if ( (c === Cell.BLACKROCK) && V.designedTiles && V.carvedBlack && V.carvedRelief && this.m.carvedRelief.length ) {
         let v = (this.look[i] + ( ((hash(i + 5) & 1) === 1) ? 4 : 0 )) % 8;
         if ( (v === 7) && ((hash(i + 9) % 3) !== 0) ) { v = 0; }
-        const bt = ( V.blackTints ? pickTint(BLACK_TINTS, V.blackTintCount, V.blackTintStrength, i + 177) : null );
-        put(this.m.carvedRelief[v], cx, topY(h), cz, 0, 1, ( bt ? new THREE.Color(bt[0], bt[1], bt[2]) : null ));
+        const bt = ( V.blackTints ? pickTint(BLACK_TINTS, V.blackTintCount, V.blackTintStrength, i + 177) : null ),
+              bp = this.pal(i, "black");
+        put(this.m.carvedRelief[v], cx, topY(h), cz, 0, 1,
+            ( ( bt || bp ) ? new THREE.Color(...(bt ?? [1, 1, 1])).multiply(new THREE.Color(...(bp ?? [1, 1, 1]))) : null ));
       }
 
       // Brick relief (view.brickRelief): grey rock as one carved block per
